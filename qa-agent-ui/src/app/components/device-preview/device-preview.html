@@ -1,0 +1,23 @@
+<div class="relative w-full aspect-[9/16] bg-black rounded-3xl overflow-hidden border-8 border-gray-900 shadow-2xl mx-auto max-w-[300px]">
+    <!-- Screenshot Layer -->
+    <img *ngIf="socketService.screenshot()" [src]="'data:image/png;base64,' + socketService.screenshot()" class="absolute inset-0 w-full h-full object-cover" #screenshotImg>
+    <div *ngIf="!socketService.screenshot()" class="absolute inset-0 flex items-center justify-center text-gray-500 font-mono text-xs">Awaiting Screenshot...</div>
+
+    <!-- XML Overlay Layer -->
+    <div id="xml-overlay" class="absolute inset-0 pointer-events-none" style="z-index: 10;">
+        <div *ngFor="let node of xmlTree"
+            class="absolute border border-blue-500/30 hover:border-blue-400 hover:bg-blue-400/20 transition-all cursor-pointer pointer-events-auto group"
+            [style.left.%]="(node.x / deviceWidth) * 100"
+            [style.top.%]="(node.y / deviceHeight) * 100"
+            [style.width.%]="(node.width / deviceWidth) * 100"
+            [style.height.%]="(node.height / deviceHeight) * 100">
+
+            <div class="hidden group-hover:block absolute -top-8 left-0 bg-gray-900 text-white text-[9px] px-2 py-1 rounded shadow-xl whitespace-nowrap z-50">
+                <span class="font-bold text-blue-400">{{node.classAttr.split('.').pop()}}</span><br>
+                <span *ngIf="node.text" class="text-green-400">text: {{node.text}}</span>
+                <span *ngIf="node.contentDesc && !node.text" class="text-purple-400">desc: {{node.contentDesc}}</span>
+                <span class="text-gray-400 block mt-1">{{node.bounds}}</span>
+            </div>
+        </div>
+    </div>
+</div>

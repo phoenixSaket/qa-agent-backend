@@ -1,0 +1,17 @@
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 h-[600px] flex flex-col overflow-hidden">
+    <div class="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+        <h2 class="text-sm font-bold text-gray-800 flex items-center gap-2">
+            <span class="text-purple-600">📚</span> Knowledge Base
+        </h2>
+        <button (click)="requestRefresh()" class="text-xs text-purple-600 hover:text-purple-800 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-full font-medium transition-colors border border-purple-200">
+            Fetch Latest Insights
+        </button>
+    </div>
+
+    <div class="p-6 overflow-y-auto flex-1 prose prose-sm prose-purple max-w-none text-gray-600">
+        <div *ngIf="!markdownHtml()" class="text-center text-gray-400 mt-10 italic">
+            Click 'Fetch Latest Insights' to view modular markdown files.
+        </div>
+        <div [innerHTML]="markdownHtml()"></div>
+    </div>
+</div>

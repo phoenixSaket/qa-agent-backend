@@ -432,56 +432,6 @@ E.g., "Clicking at [x,y] navigates from the Login screen to the Dashboard."`;
         socket.emit('knowledge_data', knowledge);
     });
 
-    async function executeKnowledgeUpdate(mission, currentKnowledge, runLog, socket) {
-        try {
-            socket.emit('agent_message', { sender: 'system', text: 'Updating app knowledge base with findings from this step...' });
-            const knowledgeUpdatePrompt = buildKnowledgeUpdatePrompt(currentKnowledge, mission, runLog);
-
-            let updatedKnowledge = '';
-            if (aiProvider === 'ollama') {
-                const resp = await ollama.generate({
-                    model: 'gemma3:4b',
-                    prompt: knowledgeUpdatePrompt,
-                    options: { temperature: 0.4, stream: false },
-                });
-                updatedKnowledge = resp.response;
-            } else {
-                const resp = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: knowledgeUpdatePrompt,
-                    config: { temperature: 0.3 }
-                });
-                updatedKnowledge = resp.text;
-            }
-
-            updatedKnowledge = updatedKnowledge.replace(/^```markdown\n?/gi, '').replace(/^```\n?/gi, '').replace(/\n?```$/gi, '').trim();
-
-            if (updatedKnowledge.length > 50) {
-                const sections = updatedKnowledge.split('=== FILE: ');
-                let count = 0;
-                for (const section of sections) {
-                    if (!section.trim()) continue;
-                    const lines = section.split('\n');
-                    let filename = lines[0].replace('===', '').trim();
-                    const content = lines.slice(1).join('\n').trim();
-                    if (filename && filename.endsWith('.md')) {
-                        fs.writeFileSync(path.join(KNOWLEDGE_DIR, filename), content, 'utf8');
-                        count++;
-                    }
-                }
-                socket.emit('agent_message', { sender: 'system', text: `Knowledge base dynamically parsed! Updated <strong>${count} distinct Modular MD files</strong> in the knowledge core.` });
-                return updatedKnowledge;
-            } else {
-                socket.emit('agent_message', { sender: 'system', text: 'Knowledge update too short, skipping save to prevent data loss.' });
-                return currentKnowledge;
-            }
-        } catch (err) {
-            console.error('Knowledge update error:', err.message);
-            socket.emit('agent_message', { sender: 'system', text: `Could not update knowledge base: ${err.message}` });
-            return currentKnowledge;
-        }
-    }
-
     socket.on('hitl_response', (confirmed) => {
         if (hitlResolver) {
             hitlResolver(confirmed);

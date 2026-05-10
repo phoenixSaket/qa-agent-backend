@@ -1,0 +1,33 @@
+<div class="bg-gray-900 rounded-xl border border-gray-800 flex flex-col h-[600px] shadow-sm">
+    <!-- Header -->
+    <div class="border-b border-gray-800 p-3 flex justify-between items-center bg-gray-900/50 rounded-t-xl">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M4 15h16a1 1 0 001-1V6a1 1 0 00-1-1H4a1 1 0 00-1 1v8a1 1 0 001 1z"></path></svg>
+            <h2 class="text-xs font-bold text-gray-300 uppercase tracking-widest">Terminal Output</h2>
+        </div>
+        <div class="flex gap-2">
+            <button (click)="setFilter('all')" [class.bg-gray-700]="filterType() === 'all'" [class.text-white]="filterType() === 'all'" class="px-2 py-1 text-[10px] bg-gray-800 text-gray-400 rounded hover:bg-gray-700 hover:text-white transition-colors">All Logs</button>
+            <button (click)="setFilter('frontend')" [class.bg-blue-900]="filterType() === 'frontend'" [class.text-blue-200]="filterType() === 'frontend'" class="px-2 py-1 text-[10px] bg-gray-800 text-gray-400 rounded hover:bg-blue-900 hover:text-blue-200 transition-colors">Frontend</button>
+            <button (click)="setFilter('backend')" [class.bg-purple-900]="filterType() === 'backend'" [class.text-purple-200]="filterType() === 'backend'" class="px-2 py-1 text-[10px] bg-gray-800 text-gray-400 rounded hover:bg-purple-900 hover:text-purple-200 transition-colors">Backend</button>
+        </div>
+    </div>
+
+    <!-- Logs Container -->
+    <div #logContainer class="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed space-y-1 scrollbar-hide">
+        <div *ngIf="filteredLogs().length === 0" class="text-gray-600 text-center mt-10">Waiting for logs...</div>
+
+        <div *ngFor="let log of filteredLogs()"
+             class="transition-colors rounded px-2 py-1 flex items-start group"
+             [class.bg-red-900]="isError(log.message)"
+             [class.bg-opacity-20]="isError(log.message)"
+             [class.hover:bg-gray-800]="!isError(log.message)">
+
+            <span class="font-bold mr-3 shrink-0 uppercase w-[70px]"
+                  [class.text-blue-400]="log.type === 'frontend'"
+                  [class.text-purple-400]="log.type === 'backend'">
+                [{{log.type}}]
+            </span>
+            <span class="text-gray-300 break-all">{{log.message}}</span>
+        </div>
+    </div>
+</div>
