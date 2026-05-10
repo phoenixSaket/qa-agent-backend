@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QA Agent Command Center</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: #f2f4f7;
+            /* Very light gray */
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* User Message (Purple) */
+        .msg-user {
+            background-color: #f1ebfe;
+            color: #5439c6;
+            border-radius: 14px 14px 14px 4px;
+            padding: 16px 24px;
+            font-size: 14px;
+            line-height: 1.6;
+            font-weight: 500;
+            max-width: 90%;
+            position: relative;
+        }
+
+        /* Agent Message (Terminal theme) */
+        .msg-agent {
+            background-color: #f6ffee;
+            border: 1px solid #d4ebc0;
+            color: #343434;
+            border-radius: 14px 14px 14px 4px;
+            padding: 16px 24px;
+            font-size: 13.5px;
+            line-height: 1.6;
+            max-width: 95%;
+            font-weight: 400;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+
+        .msg-agent strong {
+            color: #6d42f5;
+            font-weight: 600;
+        }
+
+        /* System Messages / Actions */
+        .msg-system {
+            font-size: 12px;
+            line-height: 12px;
+            font-weight: 400;
+            color: #7d818a;
+            background: #ffffff;
+            width: fit-content;
+        }
+
+        .msg-step-divider {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin: 20px 0 10px 0;
+            padding: 0 10%;
+        }
+
+        .msg-step-divider::before,
+        .msg-step-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #e5e7eb;
+        }
+
+        .msg-step-divider span {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: #9ca3af;
+            text-transform: uppercase;
+        }
+
+        /* Input Glow Focus */
+        .input-wrapper:focus-within {
+            background-color: #ffffff;
+            border-color: #d1d5db;
+            box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .send-btn {
+            background-color: #5d4ae6;
+            transition: all 0.2s ease;
+        }
+
+        .send-btn:hover {
+            background-color: #4b3ac4;
+            transform: scale(1.02);
+        }
+
+        .send-btn:active {
+            transform: scale(0.98);
+        }
+
+        /* UI Highlight Boxes */
+        .ui-box {
+            transition: all 0.2s ease;
+        }
+
+        .ui-box-clickable {
+            background-color: rgba(107, 90, 237, 0.05);
+            border-color: rgba(107, 90, 237, 0.3);
+        }
+
+        .ui-box-clickable:hover {
+            background-color: rgba(107, 90, 237, 0.15);
+            border-color: rgba(107, 90, 237, 0.8);
+            z-index: 40;
+        }
+
+        .highlighted-target {
+            border-color: #dc2626 !important;
+            /* red-600 */
+            border-width: 3px !important;
+            background-color: rgba(220, 38, 38, 0.2) !important;
+            z-index: 50 !important;
+            box-shadow: 0 0 15px rgba(220, 38, 38, 0.5);
+        }
+
+        @keyframes target-pulse {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+            }
+
+            50% {
+                transform: scale(1.02);
+                box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
+            }
+
+            100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+            }
+        }
+
+        .animate-target {
+            animation: target-pulse 1.5s infinite;
+        }
+    </style>
+</head>
+
+<body class="h-screen flex p-6 gap-6 overflow-hidden text-gray-900">
+
+    <!-- LEFT PANEL — Chat Window -->
+    <div
+        class="w-2/3 flex flex-col bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.03)] overflow-hidden border border-gray-100">
+        <!-- Header -->
+        <header class="px-8 py-6 border-b border-gray-100 flex flex-col gap-5 relative z-10 bg-white">
+
+            <div id="tech-orchestrator"
+                class="flex flex-col gap-4 bg-gray-50/80 p-5 rounded-[22px] border border-gray-100 shadow-sm">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-[11px] font-bold uppercase tracking-widest text-gray-400">Infrastructure
+                        Orchestrator</h3>
+                    <div id="qa-ready-pill"
+                        class="hidden px-3 py-1 rounded-full bg-green-500 text-white text-[10px] font-bold animate-pulse shadow-md shadow-green-100 flex items-center gap-1.5">
+                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z">
+                            </path>
+                        </svg>
+                        READY FOR QA AGENT
+                    </div>
+                </div>
+                <div class="flex gap-4">
+                    <div class="flex-1 flex flex-col gap-2">
+                        <button id="btn-main-start-fe" onclick="socket.emit('start_project', 'frontend')"
+                            class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold text-[12px] shadow-lg shadow-blue-100 transition-all flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z">
+                                </path>
+                            </svg>
+                            Start Frontend
+                        </button>
+                        <div id="status-fe-main"
+                            class="text-[10px] font-mono font-semibold text-gray-500 flex items-center gap-2 px-2">
+                            <div class="w-1.5 h-1.5 rounded-full bg-gray-300"></div>
+                            Idle
+                        </div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col gap-2">
+                        <button id="btn-main-start-be" onclick="socket.emit('start_project', 'backend')"
+                            class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-bold text-[12px] shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12l4-4m-4 4l4 4">
+                                </path>
+                            </svg>
+                            Start Backend
+                        </button>
+                        <div id="status-be-main"
+                            class="text-[10px] font-mono font-semibold text-gray-500 flex items-center gap-2 px-2">
+                            <div class="w-1.5 h-1.5 rounded-full bg-gray-300"></div>
+                            Idle
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+        <!-- Chat Feed -->
+        <main id="chat-container" class="flex-1 overflow-y-auto px-8 py-6 scrollbar-hide relative bg-white">
+            <div id="chat-feed" class="w-full flex flex-col gap-2 pb-4 relative">
+                <!-- A subtle vertical line connecting avatars can be added here or per item -->
+            </div>
+        </main>
+
+        <!-- Input Footer -->
+        <footer class="px-8 py-6 bg-white shrink-0 z-10 relative border-t border-gray-100">
+            <!-- Scroll to bottom button (hidden by default) -->
+            <button id="scroll-bottom-btn"
+                class="absolute -top-12 left-1/2 -translate-x-1/2 w-8 h-8 bg-white border border-gray-100 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.06)] flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors hidden">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                </svg>
+            </button>
+
+            <div
+                class="input-wrapper w-full flex items-center gap-3 bg-[#f8f9fa] border border-transparent rounded-[20px] px-4 py-3 transition-colors">
+
+                <!-- Tools -->
+                <!-- <div class="flex items-center gap-1.5">
+                    <button class="p-1 text-gray-400 hover:text-gray-600 transition-colors" title="Add">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
+                    </button>
+                    <button class="p-1 text-gray-400 hover:text-gray-600 transition-colors" title="Emoji">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </button>
+                    <button class="p-1 text-gray-400 hover:text-gray-600 transition-colors transform -rotate-45" title="Attachments">
+                        <svg class="w-4 h-4 relative top-0.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                    </button>
+                </div> -->
+
+                <!-- Input -->
+                <input type="text" id="prompt-input"
+                    class="flex-1 bg-transparent border-none text-gray-800 text-[15px] placeholder-gray-400 font-medium focus:outline-none focus:ring-0 px-2 h-8"
+                    placeholder="Message to Project Chat" autocomplete="off">
+
+                <!-- Send Button -->
+                <button id="send-btn"
+                    class="send-btn flex items-center gap-2 px-5 py-2.5 rounded-full text-white text-[13px] font-semibold whitespace-nowrap shadow-sm h-full">
+                    Send Now
+                    <svg class="w-3.5 h-3.5 transform rotate-45 relative right-0.5" fill="none" stroke="currentColor"
+                        stroke-width="2.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8">
+                        </path>
+                    </svg>
+                </button>
+
+                <!-- Stop Button (Hidden initially) -->
+                <button id="stop-btn"
+                    class="hidden bg-red-500 hover:bg-red-600 transition-colors flex items-center gap-2 px-6 py-2.5 rounded-full text-white text-[13px] font-semibold whitespace-nowrap shadow-sm h-full">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                        <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                    </svg>
+                    Stop
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- RIGHT PANEL — Device Preview / Activity Tracker -->
+    <!-- Modeled after Dribbble white card -->
+    <div
+        class="w-1/3 flex flex-col items-center bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.03)] border border-gray-100 relative overflow-hidden">
+
+        <!-- Header -->
+        <div
+            class="w-full border-b border-gray-100 flex items-center justify-between px-8 py-6 bg-white shrink-0 z-10 flex gap-5 flex-col items-start">
+            <!-- Top controls -->
+
+
+            <div class="w-full flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <h2 id="panel-title" class="text-xl font-bold tracking-tight text-gray-900">Live Render</h2>
+                    <div class="flex items-center gap-2 bg-gray-100 p-1 rounded-xl">
+                        <button id="view-render-btn"
+                            class="text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all bg-white shadow-sm text-[#5d4ae6]">Render</button>
+                        <button id="view-kb-btn"
+                            class="text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all text-gray-500 hover:bg-gray-200">Knowledge</button>
+                        <button id="view-prompts-btn"
+                            class="text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all text-gray-500 hover:bg-gray-200">Prompts</button>
+                        <button id="view-logs-btn"
+                            class="text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all text-gray-500 hover:bg-gray-200">Logs</button>
+                        <label class="flex items-center gap-1 text-[10px] font-bold px-2 text-gray-600 border-l border-gray-300 ml-1 pl-3">
+                            <input type="checkbox" id="record-toggle" class="form-checkbox h-3 w-3 text-red-500 rounded"> REC
+                        </label>
+                        <button id="stream-toggle-btn"
+                            class="text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all text-green-600 hover:bg-gray-200">Stream</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 w-full h-full relative" style="padding-top: 2rem; padding-bottom: 2rem;">
+            <!-- View 1: Device View -->
+            <div id="device-view-container" class="absolute inset-0 flex justify-center items-center bg-[#fcfcfd]">
+
+                <div class="relative shrink-0" id="device-wrapper">
+                    <!-- Top Scale (X-axis) -->
+                    <div id="scale-x"
+                        class="absolute bottom-[calc(100%+16px)] left-0 w-full flex justify-between font-mono text-[10px] text-gray-400 border-b border-gray-200 pb-1 px-1">
+                        <span id="sx-0">0</span>
+                        <span id="sx-50" class="absolute left-1/2 -translate-x-1/2">50%</span>
+                        <span id="sx-100">100%</span>
+                    </div>
+
+                    <!-- Right Scale (Y-axis) -->
+                    <div id="scale-y"
+                        class="absolute left-[calc(100%+16px)] top-0 h-full flex flex-col justify-between font-mono text-[10px] text-gray-400 border-l border-gray-200 pl-1 py-1">
+                        <span id="sy-0">0</span>
+                        <span id="sy-50" class="absolute top-1/2 -translate-y-1/2 left-1">50%</span>
+                        <span id="sy-100">100%</span>
+                    </div>
+
+                    <div id="device-screen"
+                        class="relative bg-white border-4 border-gray-200 rounded-[1.5rem] shadow-xl overflow-hidden cursor-crosshair"
+                        style="width: 320px; height: 710px; max-height: 100%;">
+                        <img id="screenshot-overlay" class="absolute inset-0 w-full h-full object-contain z-0" src=""
+                            style="display: none;">
+                        <div id="loading-placeholder"
+                            class="absolute inset-0 flex items-center justify-center text-gray-400 font-medium text-sm z-0">
+                            Waiting for UI Dump...
+                        </div>
+                    </div>
+
+                    <!-- Hover Coordinates Tracker -->
+                    <div id="hover-coords"
+                        class="absolute -bottom-[20px] left-0 w-full text-center font-mono text-[11px] text-[#5d4ae6] font-semibold opacity-0 transition-opacity mt-10">
+                        X: 0, Y: 0
+                    </div>
+                </div>
+            </div> <!-- End View 1 -->
+
+            <!-- View 2: Knowledge Base -->
+            <div id="knowledge-view-container" class="absolute inset-0 hidden bg-white flex flex-col overflow-hidden">
+                <div
+                    class="px-8 py-4 border-b border-gray-100 flex items-center justify-between shrink-0 bg-gray-50/50">
+                    <select id="knowledge-dropdown"
+                        class="text-[10px] font-bold bg-white border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#5d4ae6]/20">
+                        <option value="">Select Modular File...</option>
+                    </select>
+                </div>
+                <div class="flex-1 overflow-y-auto p-8 prose prose-slate prose-sm max-w-none scrollbar-hide"
+                    id="knowledge-content">
+                    <div class="text-gray-400">Select a file to view mapped application knowledge...</div>
+                </div>
+            </div>
+
+            <!-- View 4: Prompts -->
+            <div id="prompts-view-container" class="absolute inset-0 hidden bg-[#0d1117] flex flex-col overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-800 shrink-0 bg-[#161b22]">
+                    <span class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">AI Prompt History</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 font-mono text-[11px] scrollbar-hide space-y-4"
+                    id="prompts-feed">
+                    <div class="text-gray-600 italic">No prompts sent yet...</div>
+                </div>
+            </div>
+
+            <!-- View 3: Technical Logs -->
+            <div id="logs-view-container" class="absolute inset-0 hidden bg-[#0d1117] flex flex-col overflow-hidden">
+                <!-- Control Header -->
+                <div
+                    class="px-6 py-4 border-b border-gray-800 flex items-center justify-between shrink-0 bg-[#161b22] gap-4">
+                    <div class="flex-1 flex gap-2">
+                        <div class="flex flex-col gap-1 flex-1">
+                            <span class="text-[10px] uppercase font-bold text-gray-500">Frontend (Connect.app)</span>
+                            <div class="flex gap-2">
+                                <button id="btn-start-fe"
+                                    class="text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md transition-colors">START</button>
+                                <button id="btn-stop-fe"
+                                    class="text-[10px] font-bold bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md transition-colors opacity-50"
+                                    disabled>STOP</button>
+                                <div id="status-fe"
+                                    class="p-1.5 rounded text-[10px] bg-gray-700 text-gray-400 font-bold">OFFLINE</div>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-1 flex-1 border-l border-gray-700 pl-4">
+                            <span class="text-[10px] uppercase font-bold text-gray-500">Backend (Node)</span>
+                            <div class="flex gap-2">
+                                <button id="btn-start-be"
+                                    class="text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md transition-colors">START</button>
+                                <button id="btn-stop-be"
+                                    class="text-[10px] font-bold bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md transition-colors opacity-50"
+                                    disabled>STOP</button>
+                                <div id="status-be"
+                                    class="p-1.5 rounded text-[10px] bg-gray-700 text-gray-400 font-bold">OFFLINE</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Log Feed -->
+                <div class="flex-1 overflow-y-auto p-4 font-mono text-[11px] scrollbar-hide space-y-1"
+                    id="full-log-feed">
+                    <div class="text-green-500 opacity-50">[SYSTEM] Multi-project Log Streamer initialized. Select
+                        'START' to pipe logs.</div>
+                </div>
+                <!-- Log Filters -->
+                <div class="p-3 border-t border-gray-800 bg-[#161b22] flex gap-3">
+                    <button id="filter-all"
+                        class="text-[10px] font-bold px-3 py-1 rounded bg-blue-600 text-white">ALL</button>
+                    <button id="filter-fe"
+                        class="text-[10px] font-bold px-3 py-1 rounded bg-gray-700 text-gray-300">FRONTEND</button>
+                    <button id="filter-be"
+                        class="text-[10px] font-bold px-3 py-1 rounded bg-gray-700 text-gray-300">BACKEND</button>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="tooltip"
+            class="absolute hidden bg-gray-900 text-xs p-3 rounded-lg shadow-xl z-50 pointer-events-none border border-gray-700 max-w-xs break-words text-white">
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const chatFeed = document.getElementById('chat-feed');
+        const promptInput = document.getElementById('prompt-input');
+        const sendBtn = document.getElementById('send-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const chatContainer = document.getElementById('chat-container');
+        const deviceScreen = document.getElementById('device-screen');
+        const tooltip = document.getElementById('tooltip');
+        const hoverCoords = document.getElementById('hover-coords');
+
+        // Global resolution state for mouse tracking
+        let currentDeviceWidth = 1080;
+        let currentDeviceHeight = 2400;
+
+        function getPhysicalCoords(e) {
+            const rect = deviceScreen.getBoundingClientRect();
+            const percentX = (e.clientX - rect.left) / rect.width;
+            const percentY = (e.clientY - rect.top) / rect.height;
+            return {
+                x: Math.max(0, Math.min(currentDeviceWidth, Math.round(percentX * currentDeviceWidth))),
+                y: Math.max(0, Math.min(currentDeviceHeight, Math.round(percentY * currentDeviceHeight)))
+            };
+        }
+
+        deviceScreen.addEventListener('mousemove', (e) => {
+            const coords = getPhysicalCoords(e);
+            hoverCoords.innerText = `X: ${coords.x}, Y: ${coords.y}`;
+            hoverCoords.style.opacity = '1';
+        });
+
+        deviceScreen.addEventListener('mousedown', (e) => {
+            const coords = getPhysicalCoords(e);
+            socket.emit('emulator_action', { action: 'tap', x: coords.x, y: coords.y });
+            
+            const ripple = document.createElement('div');
+            ripple.className = 'absolute rounded-full border-2 border-red-500 animate-ping pointer-events-none z-50';
+            ripple.style.left = `${(coords.x / currentDeviceWidth) * 100}%`;
+            ripple.style.top = `${(coords.y / currentDeviceHeight) * 100}%`;
+            ripple.style.width = '20px';
+            ripple.style.height = '20px';
+            ripple.style.transform = 'translate(-50%, -50%)';
+            deviceScreen.appendChild(ripple);
+            setTimeout(() => ripple.remove(), 1000);
+        });
+
+        deviceScreen.addEventListener('mouseleave', () => {
+            hoverCoords.style.opacity = '0';
+        });
+
+        // Toggle UI variables
+        const viewRenderBtn = document.getElementById('view-render-btn');
+        const viewKbBtn = document.getElementById('view-kb-btn');
+        const viewPromptsBtn = document.getElementById('view-prompts-btn');
+        const viewLogsBtn = document.getElementById('view-logs-btn');
+
+        const panelTitle = document.getElementById('panel-title');
+        const deviceViewContainer = document.getElementById('device-view-container');
+        const knowledgeViewContainer = document.getElementById('knowledge-view-container');
+        const promptsViewContainer = document.getElementById('prompts-view-container');
+        const logsViewContainer = document.getElementById('logs-view-container');
+
+        const knowledgeContent = document.getElementById('knowledge-content');
+        const promptsFeed = document.getElementById('prompts-feed');
+        const fullLogFeed = document.getElementById('full-log-feed');
+
+        let isRunning = false;
+
+        function setRunningState(running) {
+            isRunning = running;
+            if (running) {
+                sendBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else {
+                stopBtn.classList.add('hidden');
+                sendBtn.classList.remove('hidden');
+            }
+        }
+
+        // Initial state check
+        socket.emit('get_project_states');
+
+        // 1. Handle Chat Rendering
+        socket.on('agent_message', (data) => {
+            const msgDiv = document.createElement('div');
+
+            // Listen for system message that completes/stops to reset UI
+            if (data.sender === 'system' && (data.text.includes('forcibly stopped') || data.text.includes('Mission Accomplished') || data.text.includes('concluded') || data.text.includes('Error'))) {
+                setRunningState(false);
+            }
+
+            if (data.sender === 'user') {
+                msgDiv.className = 'w-full flex justify-end mb-2 pl-12';
+                // User message (right-aligned)
+                msgDiv.innerHTML = `
+                    <div class="msg-user">
+                        ${data.text}
+                    </div>`;
+            } else if (data.sender === 'system') {
+                if (data.text.includes('━━━')) {
+                    msgDiv.className = 'msg-step-divider w-full';
+                    msgDiv.innerHTML = `<span>${data.text.replace(/<\/?strong>|━+/g, '').trim()}</span>`;
+                } else if (data.text.includes('[HITL]')) {
+                    msgDiv.className = 'w-full flex mb-2 p-4 bg-yellow-50 border border-yellow-200 rounded-xl flex-col gap-3 shadow-sm';
+                    msgDiv.innerHTML = `
+                        <div class="text-sm font-semibold text-yellow-800 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                            HUMAN-IN-THE-LOOP REQUIRED
+                        </div>
+                        <div class="text-[13px] text-yellow-900">${data.text.replace('[HITL]', '').trim()}</div>
+                        <div class="flex gap-2">
+                            <button onclick="sendHitl(true, this)" class="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all">CONFIRM (Y)</button>
+                            <button onclick="sendHitl(false, this)" class="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all">REJECT (N)</button>
+                        </div>
+                    `;
+                } else {
+                    msgDiv.className = 'w-full flex mb-1';
+                    msgDiv.innerHTML = `<span class="msg-system">
+                        ${data.text}
+                    </span>`;
+                }
+            } else {
+                // Agent message (Gray outline card with Avatar)
+                msgDiv.className = 'flex w-full items-start gap-4 mb-4 relative';
+
+                // Parse the reasoning from the text (it was emitted as a string from server.js)
+                const parts = data.text.split('<br>');
+                let formattedText = data.text;
+
+                if (parts.length > 1) {
+                    formattedText = `
+                        <div class="flex flex-col gap-3">
+                            ${parts.map(p => {
+                        const [label, ...content] = p.split(':');
+                        const cleanLabel = label.replace(/<\/?strong>/g, '').trim();
+                        const val = content.join(':').trim();
+
+                        let icon = '';
+                        let colorClass = 'text-gray-500';
+
+                        if (cleanLabel === 'Observation') { icon = '👁️'; colorClass = 'text-blue-600'; }
+                        else if (cleanLabel === 'Thought') { icon = '🧠'; colorClass = 'text-purple-600'; }
+                        else if (cleanLabel === 'Plan') { icon = '📋'; colorClass = 'text-green-600'; }
+                        else if (cleanLabel === 'Audit') { icon = '🛡️'; colorClass = 'text-orange-600'; }
+                        else if (cleanLabel === 'Action') { icon = '⚡'; colorClass = 'text-red-600 font-bold'; }
+
+                        if (!icon) return p; // Fallback for other lines
+
+                        return `
+                                    <div class="flex flex-col gap-1 border-l-2 pl-3 border-gray-100">
+                                        <div class="text-[10px] font-bold uppercase tracking-wider ${colorClass} flex items-center gap-1.5">
+                                            <span>${icon}</span> ${cleanLabel}
+                                        </div>
+                                        <div class="text-[13px] leading-relaxed">${val}</div>
+                                    </div>
+                                `;
+                    }).join('')}
+                        </div>
+                    `;
+                }
+
+                msgDiv.innerHTML = `
+                    <!-- Connector line simulation -->
+                    <div class="absolute left-[15px] top-10 bottom-[-20px] border-l border-dashed border-gray-200 z-0"></div>
+                    
+                    <img class="w-[32px] h-[32px] rounded-full border border-gray-200 shadow-sm z-10 bg-white object-cover" src="https://i.pravatar.cc/150?img=33" alt="Agent">
+                    
+                    <div class="flex-1 flex flex-col items-start gap-1">
+                        <div class="flex items-center gap-2 pl-1 mb-0.5">
+                            <span class="font-bold text-gray-900 text-[13px]">Agent</span>
+                            <span class="text-gray-400 text-[11px] font-medium">QA Agent</span>
+                        </div>
+                        <div class="msg-agent w-full relative">
+                            ${formattedText}
+                        </div>
+                    </div>
+                `;
+            }
+
+            chatFeed.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        });
+
+        // 2. Handle XML Rendering (Auto-Scaling Version)
+        // 2. Handle XML Rendering (With Visible Text)
+        socket.on('ui_dump', (data) => {
+            deviceScreen.innerHTML = ''; // Clear the old screen
+            deviceScreen.classList.remove('bg-white/20', 'backdrop-blur-sm'); // Make completely transparent when XML loads
+            
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(data.xml, "text/xml");
+            const nodes = xmlDoc.getElementsByTagName('node');
+
+            let maxWidth = 0;
+            let maxHeight = 0;
+            const validNodes = [];
+
+            // Pass 1: Extract coordinates and auto-detect true device resolution
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                const boundsStr = node.getAttribute('bounds');
+                if (!boundsStr) continue;
+
+                const match = boundsStr.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+                if (!match) continue;
+
+                const x1 = parseInt(match[1], 10);
+                const y1 = parseInt(match[2], 10);
+                const x2 = parseInt(match[3], 10);
+                const y2 = parseInt(match[4], 10);
+
+                if (x2 > maxWidth) maxWidth = x2;
+                if (y2 > maxHeight) maxHeight = y2;
+
+                validNodes.push({ node, boundsStr, x1, y1, x2, y2 });
+            }
+
+            console.log(`[UI Render] Detected Device Resolution: ${maxWidth}x${maxHeight} from ${validNodes.length} elements.`);
+
+            currentDeviceWidth = maxWidth > 0 ? maxWidth : 1080;
+            currentDeviceHeight = maxHeight > 0 ? maxHeight : 2400;
+
+            const ACTUAL_WIDTH = currentDeviceWidth;
+            const ACTUAL_HEIGHT = currentDeviceHeight;
+
+            // Dynamically update the scales based on connected device resolution
+            document.getElementById('sx-50').innerText = Math.round(ACTUAL_WIDTH / 2);
+            document.getElementById('sx-100').innerText = ACTUAL_WIDTH;
+            document.getElementById('sy-50').innerText = Math.round(ACTUAL_HEIGHT / 2);
+            document.getElementById('sy-100').innerText = ACTUAL_HEIGHT;
+
+            const containerWidth = 320;
+            const scaleFactor = containerWidth / ACTUAL_WIDTH;
+            deviceScreen.style.height = `${(containerWidth * (ACTUAL_HEIGHT / ACTUAL_WIDTH))}px`;
+
+            // Pass 2: Draw the boxes and add the text
+            validNodes.forEach(({ node, boundsStr, x1, y1, x2, y2 }) => {
+                const width = x2 - x1;
+                const height = y2 - y1;
+
+                if (width <= 0 || height <= 0 || (width >= ACTUAL_WIDTH && height >= ACTUAL_HEIGHT)) return;
+
+                const text = node.getAttribute('text') || '';
+                const contentDesc = node.getAttribute('content-desc') || '';
+                const className = node.getAttribute('class') || '';
+
+                const box = document.createElement('div');
+                box.setAttribute('data-bounds', boundsStr);
+
+                const isClickable = node.getAttribute('clickable') === 'true';
+
+                // Transparent purplish style for boxes on light background
+                box.className = `ui-box absolute border border-[#6b5aed]/20 cursor-crosshair transition-all flex items-center justify-center overflow-hidden rounded-sm ${isClickable ? 'ui-box-clickable' : 'pointer-events-none opacity-20'}`;
+
+                box.style.left = `${(x1 / ACTUAL_WIDTH) * 100}%`;
+                box.style.top = `${(y1 / ACTUAL_HEIGHT) * 100}%`;
+                box.style.width = `${(width / ACTUAL_WIDTH) * 100}%`;
+                box.style.height = `${(height / ACTUAL_HEIGHT) * 100}%`;
+
+                // let displayText = text;
+                // if (!displayText && contentDesc) displayText = `[${contentDesc}]`;
+
+                // if (displayText) {
+                //     const textSpan = document.createElement('span');
+                //     textSpan.className = 'text-[#5d4ae6] bg-white/80 px-1 rounded-sm font-semibold text-[8px] text-center pointer-events-none z-10 break-all leading-tight shadow-sm';
+                //     textSpan.innerText = displayText;
+                //     box.appendChild(textSpan);
+                // }
+
+                const centerX = Math.round((x1 + x2) / 2);
+                const centerY = Math.round((y1 + y2) / 2);
+
+                box.addEventListener('mouseenter', (e) => {
+                    tooltip.innerHTML = `
+                        <div class="font-bold text-gray-200 mb-1 border-b border-gray-700 pb-1">${className.split('.').pop()}</div>
+                        ${text ? `<div class="mt-1"><span class="text-gray-400">Text:</span> "${text}"</div>` : ''}
+                        ${contentDesc ? `<div><span class="text-gray-400">Desc:</span> "${contentDesc}"</div>` : ''}
+                        <div class="mt-2 text-gray-400 font-mono text-[9px]">Bounds: ${boundsStr}</div>
+                        <div class="text-[#8B7AFF] font-mono mt-1 text-[9px]">Center Click: [${centerX}, ${centerY}]</div>
+                    `;
+                    tooltip.style.display = 'block';
+                });
+
+                box.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = `${e.pageX + 15}px`;
+                    tooltip.style.top = `${e.pageY + 15}px`;
+                });
+
+                box.addEventListener('mouseleave', () => {
+                    tooltip.style.display = 'none';
+                });
+
+                deviceScreen.appendChild(box);
+            });
+        });
+
+        socket.on('agent_screenshot', (data) => {
+            const overlay = document.getElementById('screenshot-overlay');
+            const placeholder = document.getElementById('loading-placeholder');
+            if (overlay && data.base64) {
+                overlay.src = `data:image/png;base64,${data.base64}`;
+                overlay.style.display = 'block';
+                if (placeholder) placeholder.style.display = 'none';
+            }
+        });
+
+        socket.on('highlight_target', (data) => {
+            const bounds = data.bounds;
+            // Remove previous highlights
+            document.querySelectorAll('.ui-box').forEach(el => {
+                el.classList.remove('highlighted-target', 'animate-target');
+            });
+
+            if (bounds) {
+                const target = document.querySelector(`.ui-box[data-bounds="${bounds}"]`);
+                if (target) {
+                    target.classList.add('highlighted-target', 'animate-target');
+                    console.log(`[UI] Highlighted agent target: ${bounds}`);
+                }
+            }
+        });
+
+        socket.on('adb_command_result', (data) => {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'w-full flex mb-1';
+            msgDiv.innerHTML = `<div class="msg-system">
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                ${data}
+            </div>`;
+            chatFeed.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        });
+
+        // Fetch specific knowledge file
+        async function fetchKnowledgeFile(filename) {
+            if (!filename) return;
+            try {
+                const response = await fetch(`/api/knowledge-files/${filename}`);
+                if (response.ok) {
+                    const markdownStr = await response.text();
+                    knowledgeContent.innerHTML = marked.parse(markdownStr);
+                } else {
+                    knowledgeContent.innerHTML = `<div class="text-red-500">Failed to load ${filename}</div>`;
+                }
+            } catch (err) {
+                console.error(err);
+                knowledgeContent.innerHTML = `<div class="text-red-500">Error loading memory.</div>`;
+            }
+        }
+
+        const knowledgeDropdown = document.getElementById('knowledge-dropdown');
+        if (knowledgeDropdown) {
+            knowledgeDropdown.addEventListener('change', (e) => fetchKnowledgeFile(e.target.value));
+        }
+
+        // Fetch list of multiple modular knowledge items dynamically
+        async function fetchKnowledgeFiles() {
+            try {
+                const response = await fetch('/api/knowledge-files');
+                const data = await response.json();
+
+                // Keep the first default option but clear the rest
+                knowledgeDropdown.innerHTML = '<option value="">Select Modular File...</option>';
+
+                data.files.forEach(file => {
+                    const opt = document.createElement('option');
+                    opt.value = file;
+                    // Prettify name
+                    opt.innerText = file.replace(/_/g, ' ').replace('.md', '').replace(/\b\w/g, l => l.toUpperCase());
+                    knowledgeDropdown.appendChild(opt);
+                });
+
+                if (data.files.length > 0) {
+                    knowledgeDropdown.value = data.files[0];
+                    fetchKnowledgeFile(data.files[0]);
+                } else {
+                    knowledgeContent.innerHTML = `<div class="text-gray-400">No knowledge models found in directory. Run a test!</div>`;
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function switchView(mode) {
+            // Reset buttons
+            [viewRenderBtn, viewKbBtn, viewPromptsBtn, viewLogsBtn].forEach(b => {
+                b.className = "text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all text-gray-500 hover:bg-gray-200";
+            });
+            // Hide all containers
+            [deviceViewContainer, knowledgeViewContainer, promptsViewContainer, logsViewContainer].forEach(c => {
+                if (c) c.classList.add('hidden');
+            });
+
+            if (mode === 'render') {
+                deviceViewContainer.classList.remove('hidden');
+                deviceViewContainer.classList.add('flex');
+                viewRenderBtn.className = "text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all bg-white shadow-sm text-[#5d4ae6]";
+                panelTitle.innerText = "Live Render";
+            } else if (mode === 'kb') {
+                knowledgeViewContainer.classList.remove('hidden');
+                viewKbBtn.className = "text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all bg-white shadow-sm text-[#5d4ae6]";
+                panelTitle.innerText = "Knowledge Base";
+                fetchKnowledgeFiles();
+            } else if (mode === 'prompts') {
+                promptsViewContainer.classList.remove('hidden');
+                viewPromptsBtn.className = "text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all bg-white shadow-sm text-[#5d4ae6]";
+                panelTitle.innerText = "AI Prompt History";
+            } else if (mode === 'logs') {
+                logsViewContainer.classList.remove('hidden');
+                logsViewContainer.classList.add('flex');
+                viewLogsBtn.className = "text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all bg-white shadow-sm text-[#5d4ae6]";
+                panelTitle.innerText = "Technical Logs";
+                socket.emit('get_project_states');
+            }
+        }
+
+        viewRenderBtn.addEventListener('click', () => switchView('render'));
+        viewKbBtn.addEventListener('click', () => switchView('kb'));
+        viewPromptsBtn.addEventListener('click', () => switchView('prompts'));
+        viewLogsBtn.addEventListener('click', () => switchView('logs'));
+
+        socket.on('full_prompt', (data) => {
+            if (data.system) {
+                // Initial system prompt (show once)
+                const sysDiv = document.createElement('div');
+                sysDiv.className = "border-b-2 border-[#5d4ae6]/30 pb-6 mb-8";
+                sysDiv.innerHTML = `
+                    <div class="text-[#5d4ae6] font-black text-[12px] mb-3 flex items-center gap-2 tracking-widest uppercase">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                        Global System Protocol
+                    </div>
+                    <pre class="bg-[#1c2128] p-4 rounded-xl text-gray-400 whitespace-pre-wrap text-[11px] border border-gray-800 leading-relaxed shadow-inner">${data.system}</pre>
+                `;
+                if (promptsFeed.innerText.includes('No prompts')) promptsFeed.innerHTML = '';
+                promptsFeed.appendChild(sysDiv);
+            }
+
+            const step = document.createElement('div');
+            step.className = "pb-6 mb-6 border-b border-gray-800/50";
+            step.innerHTML = `
+                <div class="text-green-400 font-bold mb-3 flex items-center justify-between text-[11px] tracking-wide">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        STEP ${data.step} CONTEXT
+                    </div>
+                    <span class="text-gray-600 font-mono">T+${new Date().toLocaleTimeString()}</span>
+                </div>
+                <pre class="bg-[#161b22] p-4 rounded-xl text-gray-300 whitespace-pre-wrap text-[11px] border border-gray-800 shadow-sm">${data.prompt}</pre>
+            `;
+            promptsFeed.appendChild(step);
+            promptsFeed.scrollTop = promptsFeed.scrollHeight;
+        });
+
+        // Handle Live Thinking
+        socket.on('agent_thinking', (data) => {
+            let thinkingBox = document.getElementById(`thinking-step-${data.step}`);
+            if (!thinkingBox) {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'flex w-full items-start gap-4 mb-4';
+                msgDiv.innerHTML = `
+                    <div class="w-[32px] h-[32px] rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0">
+                        <span class="animate-pulse">🧠</span>
+                    </div>
+                    <div class="flex-1">
+                        <div class="text-[10px] font-bold text-blue-500 uppercase tracking-widest mb-1">Model Thinking...</div>
+                        <div id="thinking-step-${data.step}" class="bg-[#f8fafc] border border-blue-100 rounded-xl p-4 text-[12px] font-mono text-blue-900 whitespace-pre-wrap leading-relaxed shadow-sm"></div>
+                    </div>
+                `;
+                chatFeed.appendChild(msgDiv);
+                thinkingBox = document.getElementById(`thinking-step-${data.step}`);
+            }
+            thinkingBox.innerText += data.chunk;
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        });
+
+        // --- PROJECT LOGS & CONTROL ---
+        const btnStartFe = document.getElementById('btn-start-fe');
+        const btnStopFe = document.getElementById('btn-stop-fe');
+        const statusFe = document.getElementById('status-fe');
+
+        const btnStartBe = document.getElementById('btn-start-be');
+        const btnStopBe = document.getElementById('btn-stop-be');
+        const statusBe = document.getElementById('status-be');
+
+        btnStartFe.addEventListener('click', () => socket.emit('start_project', 'frontend'));
+        btnStopFe.addEventListener('click', () => socket.emit('stop_project', 'frontend'));
+        btnStartBe.addEventListener('click', () => socket.emit('start_project', 'backend'));
+        btnStopBe.addEventListener('click', () => socket.emit('stop_project', 'backend'));
+
+        const activeLogRequests = new Set();
+        setInterval(() => {
+            if (activeLogRequests.has('frontend')) socket.emit('request_project_logs', 'frontend');
+            if (activeLogRequests.has('backend')) socket.emit('request_project_logs', 'backend');
+        }, 1500);
+
+        // Map inputs
+        document.getElementById('record-toggle')?.addEventListener('change', (e) => {
+            socket.emit('toggle_recording_mode', e.target.checked);
+        });
+
+        let isStreaming = false;
+        document.getElementById('stream-toggle-btn')?.addEventListener('click', (e) => {
+            isStreaming = !isStreaming;
+            if (isStreaming) {
+                e.target.innerText = 'Stop';
+                e.target.classList.replace('text-green-600', 'text-red-500');
+                socket.emit('start_emulator_stream');
+            } else {
+                e.target.innerText = 'Stream';
+                e.target.classList.replace('text-red-500', 'text-green-600');
+                socket.emit('stop_emulator_stream');
+            }
+        });
+
+        function startTechStack() {
+            socket.emit('start_project', 'frontend');
+            socket.emit('start_project', 'backend');
+
+            // Immediately show starting status on buttons
+            document.getElementById('status-fe-main').innerHTML = `<div class="w-1.5 h-1.5 rounded-full bg-yellow-500"></div> Executing "npm run android"...`;
+            document.getElementById('status-be-main').innerHTML = `<div class="w-1.5 h-1.5 rounded-full bg-yellow-500"></div> Executing "npm run dev"...`;
+        }
+
+        socket.on('project_log', (data) => {
+            const line = document.createElement('div');
+            line.className = `log-line project-${data.type} transition-colors`;
+            const color = data.type === 'frontend' ? 'text-blue-400' : 'text-purple-400';
+            line.innerHTML = `<span class="${color} font-bold mr-2">[${data.type.toUpperCase()}]</span> <span class="text-gray-300">${data.message}</span>`;
+
+            // Check for error keywords
+            if (data.message.toLowerCase().includes('error') || data.message.toLowerCase().includes('exception')) {
+                line.classList.add('bg-red-900/20');
+            }
+
+            fullLogFeed.appendChild(line);
+            if (fullLogFeed.childNodes.length > 300) fullLogFeed.removeChild(fullLogFeed.firstChild);
+            fullLogFeed.scrollTop = fullLogFeed.scrollHeight;
+        });
+
+        socket.on('project_state', (data) => {
+            const isFe = data.type === 'frontend';
+            const startBtn = isFe ? btnStartFe : btnStartBe;
+            const stopBtn = isFe ? btnStopFe : btnStopBe;
+            const statusDiv = isFe ? statusFe : statusBe;
+
+            if (data.running) {
+                startBtn.classList.add('opacity-50');
+                startBtn.disabled = true;
+                stopBtn.classList.remove('opacity-50');
+                stopBtn.disabled = false;
+                statusDiv.innerText = "RUNNING";
+                statusDiv.className = "p-1.5 rounded text-[10px] bg-green-900 text-green-400 font-bold animate-pulse";
+            } else {
+                startBtn.classList.remove('opacity-50');
+                startBtn.disabled = false;
+                stopBtn.classList.add('opacity-50');
+                stopBtn.disabled = true;
+                statusDiv.innerText = "OFFLINE";
+                statusDiv.className = "p-1.5 rounded text-[10px] bg-gray-700 text-gray-400 font-bold";
+            }
+
+            // --- MAIN DASHBOARD STATUS SYNC ---
+            const mainStartBtn = isFe ? document.getElementById('btn-main-start-fe') : document.getElementById('btn-main-start-be');
+            const mainStatusLabel = isFe ? document.getElementById('status-fe-main') : document.getElementById('status-be-main');
+            const cmdText = isFe ? "npm run android" : "npm run dev";
+
+            if (data.running) {
+                mainStartBtn.classList.add('opacity-50', 'pointer-events-none');
+                mainStatusLabel.innerHTML = `<div class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div> Ready: "${cmdText}" active`;
+                mainStatusLabel.classList.replace('text-gray-500', 'text-green-600');
+            } else {
+                mainStartBtn.classList.remove('opacity-50', 'pointer-events-none');
+                mainStatusLabel.innerHTML = `<div class="w-1.5 h-1.5 rounded-full bg-gray-300"></div> Idle: waiting to execute "${cmdText}"`;
+                mainStatusLabel.classList.replace('text-green-600', 'text-gray-500');
+            }
+
+            // --- QA READY GLOBAL CHECK ---
+            const feRunning = statusFe.innerText === "RUNNING";
+            const beRunning = statusBe.innerText === "RUNNING";
+            const qaReadyPill = document.getElementById('qa-ready-pill');
+            if (feRunning && beRunning) {
+                qaReadyPill.classList.remove('hidden');
+            } else {
+                qaReadyPill.classList.add('hidden');
+            }
+        });
+
+        // Request initial state on load
+        socket.emit('get_project_states');
+
+        // Filter Logic
+        document.getElementById('filter-all').addEventListener('click', () => {
+            document.querySelectorAll('.log-line').forEach(l => l.style.display = 'block');
+        });
+        document.getElementById('filter-fe').addEventListener('click', () => {
+            document.querySelectorAll('.log-line').forEach(l => l.style.display = l.classList.contains('project-frontend') ? 'block' : 'none');
+        });
+        document.getElementById('filter-be').addEventListener('click', () => {
+            document.querySelectorAll('.log-line').forEach(l => l.style.display = l.classList.contains('project-backend') ? 'block' : 'none');
+        });
+
+        function sendHitl(confirmed, btn) {
+            socket.emit('hitl_response', confirmed);
+            // Disable buttons to prevent duplicate responses
+            const container = btn.parentElement;
+            container.innerHTML = `<span class="text-[11px] font-bold ${confirmed ? 'text-green-600' : 'text-red-600'}">${confirmed ? '✅ CONFIRMED' : '❌ REJECTED'}</span>`;
+        }
+
+        // Send Command Logic
+        function sendCommand() {
+            const text = promptInput.value.trim();
+            if (text && !isRunning) {
+                socket.emit('user_command', text);
+                promptInput.value = '';
+                setRunningState(true);
+            }
+        }
+
+        // Stop Execution Logic
+        function stopCommand() {
+            if (isRunning) {
+                socket.emit('stop_agent');
+                setRunningState(false);
+            }
+        }
+
+        sendBtn.addEventListener('click', sendCommand);
+        stopBtn.addEventListener('click', stopCommand);
+        promptInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendCommand();
+        });
+    </script>
+</body>
+
+</html>
