@@ -104,7 +104,7 @@ const agentSchema = {
             },
             targetBounds: {
                 type: 'string',
-                description: "The exact bounds string from the XML for the element being interacted with, e.g. '[1128,2703][1176,2739]'. Empty string if action is UNDERSTAND/BACK/MISSION_ACCOMPLISHED/BUG_DETECTED/READ_CODE."
+                description: "MUST ONLY BE the raw coordinates like '[1128,2703][1176,2739]'. DO NOT include '[UI-ELEMENT]' or 'bounds=' in the string. Empty string if action is UNDERSTAND/BACK/MISSION_ACCOMPLISHED/BUG_DETECTED/READ_CODE."
             },
             action: {
                 type: 'string',
@@ -205,9 +205,9 @@ SPATIAL EXPLORATION PROTOCOL (CRITICAL):
 3. **Chain of Thought**: Verify if the current UI state matches your [PREVIOUS INTENTION]. If it doesn't, pivot immediately.
 
 RULES:
-1. Find the target element in the list above (marked with [UI-ELEMENT]). You MUST ONLY copy the exact string inside \`bounds="..."\` for your \`targetBounds\`. Do not make up coordinates or use generic full-screen bounds. If you cannot find a specific element to interact with, use the UNDERSTAND or SCROLL_DOWN action with an empty string for bounds.
-2. Calculate center: x = (x1+x2)/2, y = (y1+y2)/2.
-3. Set targetBounds to the copied bounds string.
+1. Find the target element in the list above (marked with [UI-ELEMENT]).
+2. For \`targetBounds\`, you MUST ONLY output the raw coordinates (e.g. "[100,200][300,400]"). DO NOT output the text "bounds=" and DO NOT output "[UI-ELEMENT]". Do not make up coordinates or use generic full-screen bounds. If you cannot find a specific element to interact with, use the UNDERSTAND or SCROLL_DOWN action with an empty string for bounds.
+3. Calculate center: x = (x1+x2)/2, y = (y1+y2)/2.
 4. Output an **ARRAY of actions** allowing you to take multi-step decisions confidently.
 5. Choose from: TAP, TYPE, BACK, SCROLL_UP, SCROLL_DOWN, MISSION_ACCOMPLISHED, BUG_DETECTED, INJECT_LOG, READ_CODE, UNDERSTAND.
 6. Only output MISSION_ACCOMPLISHED if the goal is proven reached by the XML.

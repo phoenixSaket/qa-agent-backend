@@ -444,12 +444,19 @@ class Supervisor {
                     consecutiveBlockedAttempts = 0;
 
                     if (decision.targetBounds && decision.targetBounds.length > 0 && decision.targetBounds !== '[]') {
+                        // Attempt to salvage the bounds if the LLM output extra text
+                        const salvageMatch = decision.targetBounds.match(/(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])/);
+                        if (salvageMatch) {
+                            decision.targetBounds = salvageMatch[1];
+                        }
+
                         // Check if the bounds match the full screen resolution approximately, indicating a hallucination
-                        if (decision.targetBounds.includes(`0,0`) || decision.targetBounds.includes(`0, 0`)) {
+                        if (decision.targetBounds.includes(`[0,0]`) || decision.targetBounds.includes(`[0, 0]`)) {
                              const matchWidthHeight = decision.targetBounds.match(/(\\d+)[,\\]\\]?\s*\\]?$/);
                              if (matchWidthHeight && parseInt(matchWidthHeight[1], 10) >= deviceDetails.width - 100) {
                                  this.appendWeight(-25, `Hallucination Guard! Attempted to use generic full-screen bounds: ${decision.targetBounds}`);
                                  this.runLog.push(`[SYSTEM REJECTED] Target bounds are too generic/full-screen. You MUST target specific UI elements.`);
+                                 this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Too generic/full-screen.` });
                                  continue;
                              }
                         }
@@ -466,11 +473,13 @@ class Supervisor {
                         if (!filteredUi.includes(decision.targetBounds)) {
                             this.appendWeight(-25, `Hallucination Guard! Attempted to target invisible bounds.`);
                             this.runLog.push(`[SYSTEM REJECTED] Target bounds do not exist in current UI.`);
+                            this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Bounds not found in UI.` });
                             continue;
                         }
                     } else if (decision.targetBounds === '[]' || decision.targetBounds === '[0, 0, 1080, 1920]' || decision.targetBounds === '[0, 0, 1280, 720]') {
                         this.appendWeight(-25, `Hallucination Guard! Attempted to target invalid generic bounds.`);
                         this.runLog.push(`[SYSTEM REJECTED] Target bounds are invalid. Pick exact bounds from the list or use UNDERSTAND with empty bounds.`);
+                        this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Invalid generic bounds format.` });
                         continue;
                     }
 
