@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { Architect, Navigator, Sentry, Reporter, Cartographer } = require('./workers');
+const { Architect, Navigator, Sentry, Reporter, Cartographer, VisualDiff, Trainer } = require('./workers');
 const { buildSystemPrompt, agentSchema, buildKnowledgeUpdatePrompt, buildMainActionPrompt, ACTION_PROMPT_FOOTER } = require('./prompts');
 
 const KNOWLEDGE_DIR = path.join(__dirname, 'knowledge_base');
@@ -27,9 +27,11 @@ class Supervisor {
         // Initialize Specialized Workers
         this.architect = new Architect();
         this.navigator = new Navigator(ai, ollama, aiProvider);
-        this.sentry = new Sentry(projectManager);
+        this.sentry = new Sentry(projectManager, ai, ollama, aiProvider);
         this.reporter = new Reporter();
         this.cartographer = new Cartographer(ai, ollama, aiProvider);
+        this.visualDiff = new VisualDiff(ai, aiProvider);
+        this.trainer = new Trainer(ai, aiProvider);
 
         this.visitedStates = new Set();
         this.stateDeadEnds = new Map();
@@ -131,6 +133,23 @@ class Supervisor {
             this.socket.emit('agent_message', { sender: 'system', text: '[SYSTEM] Loading environment context...' });
             const SYSTEM_PROMPT = buildSystemPrompt(dependencyContext);
 
+            // Proactive Code Scanning by Architect on boot
+            if (!fs.existsSync(path.join(KNOWLEDGE_DIR, 'code_architecture.md'))) {
+                this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Performing initial codebase scan. Building architectural blueprint...' });
+                try {
+                    const blueprintText = await this.architect.analyze(FRONTEND_PATH, BACKEND_PATH);
+                    this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Initial codebase map generated in knowledge core.' });
+                    await this.cartographer.rewriteKnowledgeBase(blueprintText, this.socket);
+                } catch (e) {
+                    this.socket.emit('agent_message', { sender: 'system', text: `[ARCHITECT] Warning: Failed to scan codebase - ${e.message}` });
+                }
+            } else {
+                // If the user wants a hard rewrite manually and the file exists, we can read it
+                const blueprintText = fs.readFileSync(path.join(KNOWLEDGE_DIR, 'code_architecture.md'), 'utf8');
+                // Forcing a rewrite for this specific request because the old files are broken
+                await this.cartographer.rewriteKnowledgeBase(blueprintText, this.socket);
+            }
+
             this.visitedStates.clear();
             let previousUiState = null;
             let lastActionData = null;
@@ -139,10 +158,18 @@ class Supervisor {
             let sessionBlacklist = new Set();
             let lastPlan = "No previous plan established.";
             let pendingMacroSteps = [];
+            let userOverride = null;
 
             let missionComplete = false;
             let stepCount = 0;
             const MAX_STEPS = 30;
+
+            // Intercept user commands as guidance overrides during an active mission
+            const overrideListener = (msg) => {
+                userOverride = msg;
+                this.socket.emit('agent_message', { sender: 'system', text: `[GUIDE MODEL] Ingesting user override: "${msg}"` });
+            };
+            this.socket.on('user_command', overrideListener);
 
             this.socket.emit('agent_message', { sender: 'system', text: '[SYSTEM] Fetching device screen properties...' });
             const deviceDetails = await this.adb.getDeviceDetails();
@@ -154,11 +181,8 @@ class Supervisor {
                 try {
                     this.socket.emit('agent_message', { sender: 'system', text: `<strong>━━━ Step ${stepCount}/${MAX_STEPS} ━━━</strong>` });
                     
-                    // The Sentry continuously monitors for errors
-                    const sentryAlert = this.sentry.monitorLogs();
-                    if (sentryAlert) {
-                        this.socket.emit('agent_message', { sender: 'system', text: `[SENTRY ALERT] ${sentryAlert}` });
-                    }
+                    // The Sentry continuously monitors for errors asynchronously utilizing a separate LLM
+                    const sentryAlertPromise = this.sentry.monitorLogsAsync();
 
                     // --- SUPERVISOR: THINK PHASE ---
                     // Determine if the mission is purely analytical (Architect) or requires UI interaction (Navigator).
@@ -189,10 +213,21 @@ class Supervisor {
 
                     if (!this.socket.isAgentRunning) break;
 
+                    const sentryAlert = await sentryAlertPromise;
+                    if (sentryAlert) {
+                        this.socket.emit('agent_message', { sender: 'system', text: `[SENTRY ALERT] ${sentryAlert}` });
+                    }
+
                     this.socket.emit('ui_dump', { xml: xml });
                     this.socket.emit('agent_screenshot', { base64: screenshotBase64 });
 
-                    const simplifiedUi = this.simplifyXml(xml);
+                    this.socket.emit('agent_message', { sender: 'system', text: '[NAVIGATOR] Analyzing raw UI elements to map deep interactive targets...' });
+                    let simplifiedUi = await this.navigator.identifyInteractiveElements(xml);
+
+                    if (!simplifiedUi || simplifiedUi.length < 50 || !simplifiedUi.includes('[UI-ELEMENT]')) {
+                        this.socket.emit('agent_message', { sender: 'system', text: '[NAVIGATOR] AI Analysis failed or returned empty. Falling back to heuristic XML parser.' });
+                        simplifiedUi = this.simplifyXml(xml);
+                    }
 
                     // --- SUPERVISOR: MEMORY INTEGRATION (Pre-Plan phase) ---
                     const actionWeights = this.loadWeights();
@@ -309,6 +344,11 @@ class Supervisor {
                             prompt += `\nAPP KNOWLEDGE BASE (Injected due to Stuck State):\n${currentKnowledge.substring(0, 1000)}...\n=========================================\n`;
                         }
 
+                        if (userOverride) {
+                            prompt += `\n[GUIDE MODEL / USER OVERRIDE COMMAND]\nThe human overseer has interjected with the following instruction. You MUST follow it immediately:\n"${userOverride}"\n=========================================\n`;
+                            userOverride = null; // Consume override
+                        }
+
                         prompt += ACTION_PROMPT_FOOTER;
 
                         let dynamicSystemPrompt = SYSTEM_PROMPT;
@@ -338,7 +378,7 @@ class Supervisor {
                             console.log(`\n--- [RAW LLM RESPONSE (Step ${stepCount})] ---\n${rawJsonStr}\n--- [END RAW RESPONSE] ---\n`);
                         } else {
                             const result = await this.ai.models.generateContentStream({
-                                model: 'qwen2.5-coder:latest',
+                                model: 'gemini-2.5-pro',
                                 contents: [
                                     { text: prompt },
                                     { inlineData: { mimeType: "image/png", data: screenshotBase64 } }
@@ -395,10 +435,16 @@ class Supervisor {
                     actionHistory.push(currentAction);
                     if (actionHistory.length > 5) actionHistory.shift();
 
+                    const nonInteractiveActions = ['SCROLL_DOWN', 'SCROLL_UP', 'BACK', 'UNDERSTAND', 'MISSION_ACCOMPLISHED', 'READ_CODE'];
+                    if (nonInteractiveActions.includes(decision.action)) {
+                        // Clear target bounds so the hallucination guard ignores them
+                        decision.targetBounds = "";
+                    }
+
                     if (previousUiState && this.stateDeadEnds.has(previousUiState)) {
                         const deadSet = this.stateDeadEnds.get(previousUiState);
                         const coordKey = `${decision.x},${decision.y}`;
-                        const isBoundsBlocked = decision.targetBounds && deadSet.has(decision.targetBounds);
+                        const isBoundsBlocked = decision.targetBounds && decision.targetBounds !== "" && deadSet.has(decision.targetBounds);
                         const isCoordBlocked = deadSet.has(coordKey);
 
                         if (isBoundsBlocked || isCoordBlocked) {
@@ -424,7 +470,25 @@ class Supervisor {
                     }
                     consecutiveBlockedAttempts = 0;
 
-                    if (decision.targetBounds && decision.targetBounds.length > 0) {
+                    if (decision.targetBounds && decision.targetBounds.length > 0 && decision.targetBounds !== '[]') {
+                        // Attempt to salvage the bounds if the LLM output extra text (allowing for spaces)
+                        const salvageMatch = decision.targetBounds.match(/(\\[\\d+\\s*,\\s*\\d+\\]\\[\\d+\\s*,\\s*\\d+\\])/);
+                        if (salvageMatch) {
+                            // Normalize to remove spaces
+                            decision.targetBounds = salvageMatch[1].replace(/\\s/g, '');
+                        }
+
+                        // Check if the bounds match the full screen resolution approximately, indicating a hallucination
+                        if (decision.targetBounds.includes(`[0,0]`) || decision.targetBounds.includes(`[0, 0]`)) {
+                             const matchWidthHeight = decision.targetBounds.match(/(\\d+)[,\\]\\]?\s*\\]?$/);
+                             if (matchWidthHeight && parseInt(matchWidthHeight[1], 10) >= deviceDetails.width - 100) {
+                                 this.appendWeight(-25, `Hallucination Guard! Attempted to use generic full-screen bounds: ${decision.targetBounds}`);
+                                 this.runLog.push(`[SYSTEM REJECTED] Target bounds are too generic/full-screen. You MUST target specific UI elements.`);
+                                 this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Too generic/full-screen.` });
+                                 continue;
+                             }
+                        }
+
                         const boundsMatch = decision.targetBounds.match(/\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]/);
                         if (boundsMatch) {
                             const bx1 = parseInt(boundsMatch[1], 10);
@@ -434,9 +498,18 @@ class Supervisor {
                             decision.x = Math.round((bx1 + bx2) / 2);
                             decision.y = Math.round((by1 + by2) / 2);
                         }
+
                         if (!filteredUi.includes(decision.targetBounds)) {
                             this.appendWeight(-25, `Hallucination Guard! Attempted to target invisible bounds.`);
                             this.runLog.push(`[SYSTEM REJECTED] Target bounds do not exist in current UI.`);
+                            this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Bounds not found in UI.` });
+                            continue;
+                        }
+                    } else if (decision.action === 'TAP' || decision.action === 'TYPE' || decision.action === 'LONG_PRESS' || decision.action === 'DOUBLE_TAP') {
+                        if (!decision.targetBounds || decision.targetBounds === '[]' || decision.targetBounds === '[0, 0, 1080, 1920]' || decision.targetBounds === '[0, 0, 1280, 720]') {
+                            this.appendWeight(-25, `Hallucination Guard! Attempted to target invalid generic bounds for interactive action.`);
+                            this.runLog.push(`[SYSTEM REJECTED] Target bounds are invalid for interactive action. Pick exact bounds from the list.`);
+                            this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Invalid bounds format for action.` });
                             continue;
                         }
                     }
@@ -444,16 +517,18 @@ class Supervisor {
                     this.socket.emit('highlight_target', { bounds: decision.targetBounds });
                     this.socket.emit('agent_message', {
                         sender: 'agent',
-                        text: `<strong>Observation:</strong> ${decision.observation} <br> <strong>Thought:</strong> ${decision.thought} <br> <strong>Plan:</strong> ${decision.plan} <br> <strong>Audit:</strong> ${decision.reasoning_audit} <br> <strong>Bounds:</strong> ${decision.targetBounds || 'N/A'} -> <strong>Tap:</strong> (${decision.x}, ${decision.y}) <br> <strong>Action:</strong> ${decision.action}`
+                        text: `<strong>Page:</strong> ${decision.current_page_analysis} <br> <strong>Intent:</strong> ${decision.user_intent} <br> <strong>Plan:</strong> ${decision.plan} <br> <strong>Expected:</strong> ${decision.expected_behavior} <br> <strong>Audit:</strong> ${decision.reasoning_audit} <br> <strong>Bounds:</strong> ${decision.targetBounds || 'N/A'} -> <strong>Action:</strong> ${decision.action}`
                     });
 
-                    this.runLog.push(`[Step ${stepCount}] Observation: ${decision.observation}`);
-                    this.runLog.push(`[Step ${stepCount}] Thought: ${decision.thought}`);
+                    this.runLog.push(`[Step ${stepCount}] Page: ${decision.current_page_analysis}`);
+                    this.runLog.push(`[Step ${stepCount}] Clickable: ${decision.clickable_items_analysis}`);
+                    this.runLog.push(`[Step ${stepCount}] Intent: ${decision.user_intent}`);
+                    this.runLog.push(`[Step ${stepCount}] Expected: ${decision.expected_behavior}`);
                     this.runLog.push(`[Step ${stepCount}] Plan: ${decision.plan}`);
                     this.runLog.push(`[Step ${stepCount}] Audit: ${decision.reasoning_audit}`);
                     this.runLog.push(`[Step ${stepCount}] Action: ${decision.action} at (${decision.x}, ${decision.y}) bounds=${decision.targetBounds || 'N/A'}`);
 
-                    const thoughtText = decision.thought ? decision.thought.toLowerCase() : "";
+                    const thoughtText = decision.plan ? decision.plan.toLowerCase() : "";
                     if (decision.action === 'MISSION_ACCOMPLISHED' && (thoughtText.includes('tap') || thoughtText.includes('click') || thoughtText.includes('navigate to'))) {
                         await sleep(2000);
                         stepCount--; 
@@ -469,17 +544,35 @@ class Supervisor {
 
                     switch (agentAction) {
                         case 'TAP':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] TAP Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.tap(decision.x, decision.y);
                             await sleep(2000);
+                            const afterTap = await this.adb.takeScreenshot(`step_${stepCount}_after`);
+                            const afterTapBase64 = fs.readFileSync(afterTap).toString('base64');
+                            const tapDiff = await this.visualDiff.compareStates(screenshotBase64, afterTapBase64, `Tapped at ${decision.x}, ${decision.y}`);
+                            if (!tapDiff.changed) {
+                                this.appendWeight(-10, `TAP at ${decision.x}, ${decision.y} produced NO visual changes.`);
+                                this.runLog.push(`[SYSTEM] TAP failed to produce visual changes. Reason: ${tapDiff.reason}`);
+                            } else {
+                                this.runLog.push(`[SYSTEM] TAP succeeded: ${tapDiff.reason}`);
+                            }
                             break;
                         case 'DOUBLE_TAP':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] DOUBLE_TAP Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.doubleTap(decision.x, decision.y);
                             await sleep(2000);
                             break;
                         case 'LONG_PRESS':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] LONG_PRESS Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.longPress(decision.x, decision.y);
                             await sleep(2000);
                             break;
@@ -494,6 +587,15 @@ class Supervisor {
                         case 'SCROLL_DOWN':
                             await this.adb.scrollDown();
                             await sleep(2000);
+                            const afterScroll = await this.adb.takeScreenshot(`step_${stepCount}_after`);
+                            const afterScrollBase64 = fs.readFileSync(afterScroll).toString('base64');
+                            const scrollDiff = await this.visualDiff.compareStates(screenshotBase64, afterScrollBase64, `Scrolled down`);
+                            if (!scrollDiff.changed) {
+                                this.appendWeight(-10, `SCROLL_DOWN produced NO visual changes (hit bottom of screen).`);
+                                this.runLog.push(`[SYSTEM] SCROLL_DOWN hit bottom limit. Reason: ${scrollDiff.reason}`);
+                            } else {
+                                this.runLog.push(`[SYSTEM] SCROLL_DOWN succeeded: ${scrollDiff.reason}`);
+                            }
                             break;
                         case 'SCROLL_UP':
                             await this.adb.scrollUp();
@@ -525,10 +627,23 @@ class Supervisor {
                                 try {
                                     const code = await this.projectManager.readFile(codeReq.project, codeReq.filePath);
                                     this.runLog.push(`[Step ${stepCount}] READ_CODE Output (${codeReq.filePath}):\n${code}`);
+
+                                    // Push directly to Cartographer so it updates the map
+                                    await this.cartographer.updateKnowledge(
+                                        `Analyzed codebase logic for ${codeReq.filePath}`,
+                                        this.loadKnowledge(),
+                                        [`Action: READ_CODE`, `Code snippet:\n${code.substring(0, 1000)}`],
+                                        this.socket,
+                                        buildKnowledgeUpdatePrompt
+                                    );
                                 } catch (err) {
                                     this.runLog.push(`[Step ${stepCount}] READ_CODE Failed: ${err.message}`);
                                 }
                             }
+                            break;
+                        case 'UNDERSTAND':
+                            this.runLog.push(`[Step ${stepCount}] UNDERSTAND: AI analyzed screen and logs, deferring action to learn.`);
+                            await sleep(2000);
                             break;
                         case 'MISSION_ACCOMPLISHED':
                             if (decision.x !== undefined && decision.y !== undefined && (decision.x !== 0 || decision.y !== 0)) {
@@ -583,12 +698,14 @@ class Supervisor {
             console.error("Global Mission Error:", globalError);
             this.socket.emit('agent_message', { sender: 'system', text: `Fatal Mission Error: ${globalError.message}` });
         } finally {
+            this.socket.off('user_command', overrideListener);
             this.socket.isAgentRunning = false;
             this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] Mission concluded and environment sync completed.` });
 
             // Post-Mission Knowledge Base Update via Cartographer
             const currentKnowledge = this.loadKnowledge();
             await this.cartographer.updateKnowledge(mission, currentKnowledge, this.runLog, this.socket, buildKnowledgeUpdatePrompt);
+            await this.trainer.extractTutorial(this.runLog);
         }
     }
 }

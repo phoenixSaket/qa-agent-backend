@@ -168,7 +168,8 @@ class AdbController {
         const cx = Math.floor((this.width || 1080) / 2);
         const startY = Math.floor((this.height || 2400) * 0.8);
         const endY = Math.floor((this.height || 2400) * 0.2);
-        await this._runAdb(`shell input swipe ${cx} ${startY} ${cx} ${endY} 300`);
+        // Using a longer duration ensures the swipe registers reliably as a scroll instead of a fling
+        await this._runAdb(`shell input swipe ${cx} ${startY} ${cx} ${endY} 800`);
     }
 
     /**
@@ -179,7 +180,7 @@ class AdbController {
         const cx = Math.floor((this.width || 1080) / 2);
         const startY = Math.floor((this.height || 2400) * 0.2);
         const endY = Math.floor((this.height || 2400) * 0.8);
-        await this._runAdb(`shell input swipe ${cx} ${startY} ${cx} ${endY} 300`);
+        await this._runAdb(`shell input swipe ${cx} ${startY} ${cx} ${endY} 800`);
     }
 }
 

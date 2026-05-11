@@ -32,10 +32,11 @@ You have access to "Technical System Logs" in your prompt.
 - Do not repeat actions that lead to navigation loops (e.g., tapping BACK immediately after entering a page).
 
 # NEGATIVE CONSTRAINTS (STRICT VALIDATION GUARD)
+- **No Hallucinated Bounds**: Do not invent targetBounds like [0, 0, 1080, 1920]. You MUST select an exact bounds string from the provided [UI-ELEMENT] list.
 - **No Lazy Completions**: Do not skip steps or summarize complex flows. You must verify each XML state change.
 - **Ignore Weights at Your Peril**: You MUST check the [PRE-FLIGHT CHECK: FAILED BOUNDS] section. If you target a bounds string listed there, you will be heavily penalized for ignoring action_weights.md failures.
 - **No Infinite Loops**: If you find yourself on the same screen twice without progress, you MUST change your strategy.
-- **No Backward Navigation**: Avoid clicking "Back" or returning to the start screen unless it is absolutely necessary to reach a new, unexplored area. Explain WHY you are not navigating backward in your 'thought' field.
+- **No Backward Navigation**: Avoid clicking "Back" or returning to the start screen unless it is absolutely necessary to reach a new, unexplored area. Explain WHY you are not navigating backward in your 'plan' field.
 
 # OPTIMIZATION GOAL (SCORE THRIVING)
 Maximize your Exploration Score (+10 to +12) by uncovering NEW UI Layouts. Avoid Dead States and Loops (penalized). High-value targets are unexplored elements that lead to new app layers.
@@ -45,13 +46,15 @@ Refer to XML dump and technical logs to identify the general location of critica
 
 # MULTI-STEP REASONING PROCESS
 For every turn, you MUST follow this internal process:
-1. **Observe**: Take the UI XML and Logs as input.
-2. **Think**: Analyze why the previous step happened. Did it fail? Did the logs show an error?
-3. **Audit**: Check if your next intended action is in a 'Dead Zone' or if you are repeating a loop.
-4. **Plan**: Formulate a micro-strategy (e.g., "I will read the backend code to see why the SOS fails, then I will inject a log").
-5. **Act**: Execute ONE specific action.
+1. **Analyze Page**: Determine which page you are on.
+2. **Analyze Items**: Identify what is clickable and what it does.
+3. **Simulate User Intent**: Think about how a real user would use this app.
+4. **Predict Behavior**: Determine what should happen when you take an action.
+5. **Plan & Audit**: Formulate a strategy and verify you aren't stuck in a loop.
+6. **Act**: Execute ONE specific action.
 
 # ACTIONS
+- **UNDERSTAND**: Take a turn to just observe, learn the layout, and process logs without clicking.
 - **TAP, TYPE, BACK, SCROLL**: Standard ADB interactions.
 - **INJECT_LOG**: Propose a debug log in a specific file/line.
 - **READ_CODE**: Examine the source code of the frontend or backend to understand logic. Use this when UI interaction fails or logs are cryptic.
@@ -71,34 +74,42 @@ For every turn, you MUST follow this internal process:
 
 const agentSchema = {
     type: 'array',
-    description: "An array of sequential actions to execute based on the codebase map and UI. Plan multiple steps ahead if confidence is high.",
+    description: "An array of sequential actions to execute based on the codebase map and UI. You are an autonomous QA Tester doing manual testing. Plan multiple steps ahead if confidence is high.",
     items: {
         type: 'object',
         properties: {
-            observation: {
+            current_page_analysis: {
                 type: 'string',
-                description: "Explicitly state what you currently see in the XML. MANDATORY: 'Tech Check' correlating logs."
+                description: "Which page am I on right now based on the UI dump and previous actions? Explicitly state what you currently see."
             },
-            thought: {
+            clickable_items_analysis: {
                 type: 'string',
-                description: "Critically analyze the current screen. Why was the previous step successful or a failure?"
+                description: "What are the key clickable/interactive items on this screen? What do they seem to do?"
+            },
+            user_intent: {
+                type: 'string',
+                description: "If I am a user, what is my core intent on this page? How would I use this app based on its apparent purpose?"
+            },
+            expected_behavior: {
+                type: 'string',
+                description: "How should the presses or taps I am about to make behave? What is the expected outcome in the UI or backend logs?"
             },
             plan: {
                 type: 'string',
-                description: "Define a multi-step micro-strategy. (e.g., '1. Read the controller, 2. Inject a log, 3. Re-test the button')."
+                description: "Define a micro-strategy based on your deep thinking. E.g., 'I will click X to test Y, or I will use UNDERSTAND to just learn this layout, or READ_CODE to see how the button works backend.'"
             },
             reasoning_audit: {
                 type: 'string',
-                description: "Self-correction: Is my chosen targetBounds in a known 'Dead Zone'? Am I repeating a loop?"
+                description: "Self-correction: Am I looping? Is my chosen targetBounds in a known 'Dead Zone'? Does my plan actually test the user intent?"
             },
             targetBounds: {
                 type: 'string',
-                description: "The exact bounds string from the XML for the element being interacted with, e.g. '[1128,2703][1176,2739]'. Empty string if action is BACK/MISSION_ACCOMPLISHED/BUG_DETECTED/READ_CODE."
+                description: "MUST ONLY BE the raw coordinates like '[1128,2703][1176,2739]'. DO NOT include '[UI-ELEMENT]' or 'bounds=' in the string. Empty string if action is UNDERSTAND/BACK/MISSION_ACCOMPLISHED/BUG_DETECTED/READ_CODE."
             },
             action: {
                 type: 'string',
-                enum: ['TAP', 'DOUBLE_TAP', 'LONG_PRESS', 'TYPE', 'BACK', 'SCROLL_UP', 'SCROLL_DOWN', 'MISSION_ACCOMPLISHED', 'BUG_DETECTED', 'INJECT_LOG', 'READ_CODE'],
-                description: "The specific command to run. Use READ_CODE to examine source files."
+                enum: ['TAP', 'DOUBLE_TAP', 'LONG_PRESS', 'TYPE', 'BACK', 'SCROLL_UP', 'SCROLL_DOWN', 'MISSION_ACCOMPLISHED', 'BUG_DETECTED', 'INJECT_LOG', 'READ_CODE', 'UNDERSTAND'],
+                description: "The specific command to run. Use UNDERSTAND if you just want to analyze the screen/logs without clicking. Use READ_CODE to examine source files."
             },
             logInjection: {
                 type: 'object',
@@ -131,14 +142,14 @@ const agentSchema = {
                 description: "The text to type (required if action is TYPE)."
             }
         },
-        required: ['observation', 'thought', 'plan', 'reasoning_audit', 'targetBounds', 'action', 'x', 'y']
+        required: ['current_page_analysis', 'clickable_items_analysis', 'user_intent', 'expected_behavior', 'plan', 'reasoning_audit', 'targetBounds', 'action', 'x', 'y']
     }
 };
 
 function buildKnowledgeUpdatePrompt(currentKnowledge, mission, runLog) {
     return `You are a Cartography Documentation assistant. Below is the CURRENT knowledge base spanning multiple markdown files, followed by a LOG of actions taken during a QA test.
 
-Your job: Produce an UPDATED version of the knowledge base that maps the app modularly. You MUST split your output exactly using these file delimiters:
+Your job: Produce an UPDATED version of the knowledge base that maps the app modularly. You MUST split your output exactly using these exact file delimiters format (=== FILE: <filename.md> ===):
 
 === FILE: discovered_pages.md ===
 (List newly identified screens or app states)
@@ -153,7 +164,7 @@ Your job: Produce an UPDATED version of the knowledge base that maps the app mod
 === FILE: CONNECT_SYSTEM_DOCUMENTATION.md ===
 (Map specific context logic flows: e.g., 'User clicked Settings -> Navigated to Preference View')
 
-Preserve existing knowledge and ADD new findings! Do not use markdown code-block fences around your output.
+Preserve existing knowledge and ADD new findings! Do not use markdown code-block fences around your output. Make sure the headers match EXACTLY the format "=== FILE: filename.md ===".
 
 CURRENT KNOWLEDGE BASE INCORPORATING ALL MODULES:
 ${currentKnowledge}
@@ -194,11 +205,11 @@ SPATIAL EXPLORATION PROTOCOL (CRITICAL):
 3. **Chain of Thought**: Verify if the current UI state matches your [PREVIOUS INTENTION]. If it doesn't, pivot immediately.
 
 RULES:
-1. Find the target element in the list above. Copy its EXACT bounds value.
-2. Calculate center: x = (x1+x2)/2, y = (y1+y2)/2.
-3. Set targetBounds to the copied bounds string.
+1. Find the target element in the list above (marked with [UI-ELEMENT]).
+2. For \`targetBounds\`, you MUST ONLY output the raw coordinates (e.g. "[100,200][300,400]"). DO NOT output the text "bounds=" and DO NOT output "[UI-ELEMENT]". Do not make up coordinates or use generic full-screen bounds. If you cannot find a specific element to interact with, use the UNDERSTAND or SCROLL_DOWN action with an empty string for bounds.
+3. Calculate center: x = (x1+x2)/2, y = (y1+y2)/2.
 4. Output an **ARRAY of actions** allowing you to take multi-step decisions confidently.
-5. Choose from: TAP, TYPE, BACK, SCROLL_UP, SCROLL_DOWN, MISSION_ACCOMPLISHED, BUG_DETECTED, INJECT_LOG, READ_CODE.
+5. Choose from: TAP, TYPE, BACK, SCROLL_UP, SCROLL_DOWN, MISSION_ACCOMPLISHED, BUG_DETECTED, INJECT_LOG, READ_CODE, UNDERSTAND.
 6. Only output MISSION_ACCOMPLISHED if the goal is proven reached by the XML.
 7. Verify your target choice is NEW and follows the TOP-DOWN priority.
 
