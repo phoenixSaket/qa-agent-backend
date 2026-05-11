@@ -60,8 +60,64 @@ ${strippedXml.substring(0, 15000)}
             });
             return resp.response.trim();
         } catch (err) {
-            console.error('[NAVIGATOR AI ERROR]', err);
-            return null; // Fallback to heuristic parser if AI fails
+            console.error('[NAVIGATOR OLLAMA TIMEOUT/ERROR]. Switching to Gemini Pro...', err.message);
+            try {
+                // If local Ollama hangs/times out with 10k context, fallback instantly to Gemini 2.5 Pro
+                const fallbackResp = await this.ai.models.generateContent({
+                    model: 'gemini-2.5-pro',
+                    contents: prompt,
+                    config: { temperature: 0.1 }
+                });
+                return fallbackResp.text.trim();
+            } catch (fallbackErr) {
+                console.error('[NAVIGATOR AI FALLBACK ERROR]', fallbackErr.message);
+                return null; // Fallback to heuristic parser
+            }
+        }
+    }
+}
+
+class VisualDiff {
+    constructor(aiClient, provider) {
+        this.ai = aiClient;
+        this.provider = provider;
+    }
+
+    async compareStates(beforeScreenshotBase64, afterScreenshotBase64, actionDescription) {
+        if (this.provider !== 'gemini') {
+            console.log('[VisualDiff] Local models generally lack reliable vision comparison capabilities. Skipping diff.');
+            return { changed: true, reason: 'Visual diff skipped (not using Gemini).' };
+        }
+
+        const prompt = `You are an expert UX/UI QA Agent. Compare the two screenshots of a mobile application interface provided.
+The first screenshot is the state "BEFORE" an action.
+The second screenshot is the state "AFTER" the action: "${actionDescription}".
+
+Did the visual state of the application change in a meaningful way? (e.g., did a new screen open, did a menu appear, did a button state change?)
+Ignore minor, non-functional changes like a ticking clock in the status bar or a shifting battery percentage. Focus on the core application interface.
+
+Respond in strict JSON format:
+{
+    "changed": true|false,
+    "reason": "A 1 sentence explanation of what changed or why it appears identical."
+}`;
+
+        try {
+            console.log('[VisualDiff] Analyzing state transition...');
+            const response = await this.ai.models.generateContent({
+                model: 'gemini-2.5-pro',
+                contents: [
+                    { text: prompt },
+                    { inlineData: { mimeType: "image/png", data: beforeScreenshotBase64 } },
+                    { inlineData: { mimeType: "image/png", data: afterScreenshotBase64 } }
+                ],
+                config: { responseMimeType: "application/json", temperature: 0.1 }
+            });
+            const result = JSON.parse(response.text.trim());
+            return result;
+        } catch (err) {
+            console.error('[VisualDiff AI ERROR]', err);
+            return { changed: true, reason: 'Visual diff failed, assuming change occurred.' };
         }
     }
 }
@@ -134,6 +190,62 @@ class Cartographer {
         this.provider = aiProvider;
     }
 
+    async rewriteKnowledgeBase(blueprintText, socket) {
+        socket.emit('agent_message', { sender: 'system', text: '[CARTOGRAPHER] Hard-rewriting knowledge base using new architecture...' });
+
+        const prompt = `You are the Cartographer. You need to reset and rewrite the knowledge base based on the provided Code Blueprint.
+Generate the baseline files for our agent. You MUST use exactly these file delimiters format (=== FILE: <filename.md> ===):
+
+=== FILE: discovered_pages.md ===
+(List inferred screens from the blueprint)
+=== FILE: navigation_flows.md ===
+(Predict basic navigation flows between these screens)
+=== FILE: reusable_components.md ===
+(List the UI components extracted from the blueprint)
+=== FILE: bugs_and_issues.md ===
+(Leave empty for now)
+=== FILE: CONNECT_SYSTEM_DOCUMENTATION.md ===
+(A high-level summary of the architecture)
+
+BLUEPRINT:
+${blueprintText}
+
+Output the updated markdown segments now:`;
+
+        try {
+            const resp = await this.ai.models.generateContent({
+                model: 'gemini-2.5-pro',
+                contents: prompt,
+                config: { temperature: 0.2 }
+            });
+            let updatedKnowledge = resp.text.replace(/```markdown\n?/gi, '').replace(/```/gi, '').trim();
+            const fileRegex = /===\s*FILE:\s*([a-zA-Z0-9_-]+\.md)\s*===/gi;
+            const sections = updatedKnowledge.split(fileRegex);
+            let count = 0;
+
+            // Wipe old files
+            const KNOWLEDGE_DIR = path.join(__dirname, 'knowledge_base');
+            const files = fs.readdirSync(KNOWLEDGE_DIR);
+            for (const file of files) {
+                if (file.endsWith('.md') && file !== 'code_architecture.md' && file !== 'action_weights.md') {
+                    fs.unlinkSync(path.join(KNOWLEDGE_DIR, file));
+                }
+            }
+
+            for (let i = 1; i < sections.length; i += 2) {
+                const filename = sections[i].trim();
+                const content = sections[i+1] ? sections[i+1].trim() : '';
+                if (filename.endsWith('.md') && content.length > 0) {
+                    fs.writeFileSync(path.join(KNOWLEDGE_DIR, filename), content, 'utf8');
+                    count++;
+                }
+            }
+            socket.emit('agent_message', { sender: 'system', text: `[CARTOGRAPHER] Hard-rewrite complete. Saved ${count} baseline modular files.` });
+        } catch(e) {
+            console.error('[CARTOGRAPHER REWRITE ERROR]', e);
+        }
+    }
+
     async updateKnowledge(mission, currentKnowledge, runLog, socket, buildPromptFn) {
         try {
             const hasBug = runLog.some(l => l.includes('Action: BUG_DETECTED'));
@@ -204,4 +316,34 @@ class Cartographer {
     }
 }
 
-module.exports = { Architect, Navigator, Sentry, Reporter, Cartographer };
+class Trainer {
+    constructor(aiClient, provider) {
+        this.ai = aiClient;
+        this.provider = provider;
+    }
+
+    async extractTutorial(runLog) {
+        if (this.provider !== 'gemini' || runLog.length < 3) return;
+
+        const prompt = `You are a Training Agent. Review this test log and extract a basic "tutorial" step-by-step for a first-time user.
+LOG:
+${runLog.join('\\n')}
+
+Output a single bulleted list of user actions. (e.g. "- User taps Home", "- User scrolls down")`;
+
+        try {
+            const resp = await this.ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt,
+                config: { temperature: 0.2 }
+            });
+            const tutorial = resp.text.trim();
+            const tutorialPath = path.join(__dirname, 'knowledge_base', 'exploration_tutorials.md');
+            fs.appendFileSync(tutorialPath, `\n## Tutorial generated on ${new Date().toISOString()}\n${tutorial}\n`, 'utf8');
+        } catch(e) {
+            console.error('[TRAINER ERROR]', e);
+        }
+    }
+}
+
+module.exports = { Architect, Navigator, Sentry, Reporter, Cartographer, VisualDiff, Trainer };

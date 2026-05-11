@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { Architect, Navigator, Sentry, Reporter, Cartographer } = require('./workers');
+const { Architect, Navigator, Sentry, Reporter, Cartographer, VisualDiff, Trainer } = require('./workers');
 const { buildSystemPrompt, agentSchema, buildKnowledgeUpdatePrompt, buildMainActionPrompt, ACTION_PROMPT_FOOTER } = require('./prompts');
 
 const KNOWLEDGE_DIR = path.join(__dirname, 'knowledge_base');
@@ -30,6 +30,8 @@ class Supervisor {
         this.sentry = new Sentry(projectManager, ai, ollama, aiProvider);
         this.reporter = new Reporter();
         this.cartographer = new Cartographer(ai, ollama, aiProvider);
+        this.visualDiff = new VisualDiff(ai, aiProvider);
+        this.trainer = new Trainer(ai, aiProvider);
 
         this.visitedStates = new Set();
         this.stateDeadEnds = new Map();
@@ -135,11 +137,17 @@ class Supervisor {
             if (!fs.existsSync(path.join(KNOWLEDGE_DIR, 'code_architecture.md'))) {
                 this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Performing initial codebase scan. Building architectural blueprint...' });
                 try {
-                    await this.architect.analyze(FRONTEND_PATH, BACKEND_PATH);
+                    const blueprintText = await this.architect.analyze(FRONTEND_PATH, BACKEND_PATH);
                     this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Initial codebase map generated in knowledge core.' });
+                    await this.cartographer.rewriteKnowledgeBase(blueprintText, this.socket);
                 } catch (e) {
                     this.socket.emit('agent_message', { sender: 'system', text: `[ARCHITECT] Warning: Failed to scan codebase - ${e.message}` });
                 }
+            } else {
+                // If the user wants a hard rewrite manually and the file exists, we can read it
+                const blueprintText = fs.readFileSync(path.join(KNOWLEDGE_DIR, 'code_architecture.md'), 'utf8');
+                // Forcing a rewrite for this specific request because the old files are broken
+                await this.cartographer.rewriteKnowledgeBase(blueprintText, this.socket);
             }
 
             this.visitedStates.clear();
@@ -150,10 +158,18 @@ class Supervisor {
             let sessionBlacklist = new Set();
             let lastPlan = "No previous plan established.";
             let pendingMacroSteps = [];
+            let userOverride = null;
 
             let missionComplete = false;
             let stepCount = 0;
             const MAX_STEPS = 30;
+
+            // Intercept user commands as guidance overrides during an active mission
+            const overrideListener = (msg) => {
+                userOverride = msg;
+                this.socket.emit('agent_message', { sender: 'system', text: `[GUIDE MODEL] Ingesting user override: "${msg}"` });
+            };
+            this.socket.on('user_command', overrideListener);
 
             this.socket.emit('agent_message', { sender: 'system', text: '[SYSTEM] Fetching device screen properties...' });
             const deviceDetails = await this.adb.getDeviceDetails();
@@ -328,6 +344,11 @@ class Supervisor {
                             prompt += `\nAPP KNOWLEDGE BASE (Injected due to Stuck State):\n${currentKnowledge.substring(0, 1000)}...\n=========================================\n`;
                         }
 
+                        if (userOverride) {
+                            prompt += `\n[GUIDE MODEL / USER OVERRIDE COMMAND]\nThe human overseer has interjected with the following instruction. You MUST follow it immediately:\n"${userOverride}"\n=========================================\n`;
+                            userOverride = null; // Consume override
+                        }
+
                         prompt += ACTION_PROMPT_FOOTER;
 
                         let dynamicSystemPrompt = SYSTEM_PROMPT;
@@ -450,10 +471,11 @@ class Supervisor {
                     consecutiveBlockedAttempts = 0;
 
                     if (decision.targetBounds && decision.targetBounds.length > 0 && decision.targetBounds !== '[]') {
-                        // Attempt to salvage the bounds if the LLM output extra text
-                        const salvageMatch = decision.targetBounds.match(/(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])/);
+                        // Attempt to salvage the bounds if the LLM output extra text (allowing for spaces)
+                        const salvageMatch = decision.targetBounds.match(/(\\[\\d+\\s*,\\s*\\d+\\]\\[\\d+\\s*,\\s*\\d+\\])/);
                         if (salvageMatch) {
-                            decision.targetBounds = salvageMatch[1];
+                            // Normalize to remove spaces
+                            decision.targetBounds = salvageMatch[1].replace(/\\s/g, '');
                         }
 
                         // Check if the bounds match the full screen resolution approximately, indicating a hallucination
@@ -528,6 +550,15 @@ class Supervisor {
                             }
                             await this.adb.tap(decision.x, decision.y);
                             await sleep(2000);
+                            const afterTap = await this.adb.takeScreenshot(`step_${stepCount}_after`);
+                            const afterTapBase64 = fs.readFileSync(afterTap).toString('base64');
+                            const tapDiff = await this.visualDiff.compareStates(screenshotBase64, afterTapBase64, `Tapped at ${decision.x}, ${decision.y}`);
+                            if (!tapDiff.changed) {
+                                this.appendWeight(-10, `TAP at ${decision.x}, ${decision.y} produced NO visual changes.`);
+                                this.runLog.push(`[SYSTEM] TAP failed to produce visual changes. Reason: ${tapDiff.reason}`);
+                            } else {
+                                this.runLog.push(`[SYSTEM] TAP succeeded: ${tapDiff.reason}`);
+                            }
                             break;
                         case 'DOUBLE_TAP':
                             if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
@@ -556,6 +587,15 @@ class Supervisor {
                         case 'SCROLL_DOWN':
                             await this.adb.scrollDown();
                             await sleep(2000);
+                            const afterScroll = await this.adb.takeScreenshot(`step_${stepCount}_after`);
+                            const afterScrollBase64 = fs.readFileSync(afterScroll).toString('base64');
+                            const scrollDiff = await this.visualDiff.compareStates(screenshotBase64, afterScrollBase64, `Scrolled down`);
+                            if (!scrollDiff.changed) {
+                                this.appendWeight(-10, `SCROLL_DOWN produced NO visual changes (hit bottom of screen).`);
+                                this.runLog.push(`[SYSTEM] SCROLL_DOWN hit bottom limit. Reason: ${scrollDiff.reason}`);
+                            } else {
+                                this.runLog.push(`[SYSTEM] SCROLL_DOWN succeeded: ${scrollDiff.reason}`);
+                            }
                             break;
                         case 'SCROLL_UP':
                             await this.adb.scrollUp();
@@ -658,12 +698,14 @@ class Supervisor {
             console.error("Global Mission Error:", globalError);
             this.socket.emit('agent_message', { sender: 'system', text: `Fatal Mission Error: ${globalError.message}` });
         } finally {
+            this.socket.off('user_command', overrideListener);
             this.socket.isAgentRunning = false;
             this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] Mission concluded and environment sync completed.` });
 
             // Post-Mission Knowledge Base Update via Cartographer
             const currentKnowledge = this.loadKnowledge();
             await this.cartographer.updateKnowledge(mission, currentKnowledge, this.runLog, this.socket, buildKnowledgeUpdatePrompt);
+            await this.trainer.extractTutorial(this.runLog);
         }
     }
 }
