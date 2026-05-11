@@ -24,20 +24,52 @@ class Navigator {
 }
 
 class Sentry {
-    constructor(projectManager) {
+    constructor(projectManager, aiClient, ollamaClient, provider) {
         this.pm = projectManager;
+        this.ai = aiClient;
+        this.ollama = ollamaClient;
+        this.provider = provider;
     }
-    monitorLogs() {
+
+    async monitorLogsAsync() {
         const feLogs = this.pm.getLatestLogs('frontend', 20);
         const beLogs = this.pm.getLatestLogs('backend', 20);
-        const errors = [];
-        if (feLogs.includes('ERROR') || feLogs.includes('500') || feLogs.includes('FATAL')) {
-            errors.push('Frontend Error/500 status detected in logBuffers.');
+
+        if (!feLogs && !beLogs) return null;
+
+        const prompt = `You are the Sentry AI. Analyze these real-time system logs.
+Is there a CRITICAL failure (e.g., app crash, 500 error, unhandled exception, network drop) that requires halting the QA process or notifying the user?
+Ignore standard warnings, info logs, or handled HTTP responses.
+FRONTEND LOGS:\n${feLogs}\n
+BACKEND LOGS:\n${beLogs}\n
+Output ONLY the text "CRITICAL: " followed by a 1-sentence summary of the error if a major failure occurred. Otherwise, output ONLY the text "ALL_CLEAR".`;
+
+        try {
+            let responseText = '';
+            if (this.provider === 'ollama') {
+                const resp = await this.ollama.generate({
+                    model: 'gemma2:2b',
+                    prompt: prompt,
+                    options: { temperature: 0.1, stream: false },
+                });
+                responseText = resp.response.trim();
+            } else {
+                const resp = await this.ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: prompt,
+                    config: { temperature: 0.1 }
+                });
+                responseText = resp.text.trim();
+            }
+
+            if (responseText.startsWith('CRITICAL:')) {
+                return responseText;
+            }
+            return null;
+        } catch (err) {
+            console.error('[SENTRY AI ERROR]', err);
+            return null;
         }
-        if (beLogs.includes('ERROR') || beLogs.includes('500') || beLogs.includes('FATAL') || beLogs.includes('socket fail')) {
-            errors.push('Backend Error/socket failure detected in logBuffers.');
-        }
-        return errors.length > 0 ? errors.join(' | ') : null;
     }
 }
 
@@ -76,14 +108,14 @@ class Cartographer {
             try {
                 if (this.provider === 'ollama') {
                     const resp = await this.ollama.generate({
-                        model: 'gemma2:2b', // Using a standard gemma model
+                        model: 'gemma2:2b',
                         prompt: prompt,
                         options: { temperature: 0.4, stream: false },
                     });
                     updatedKnowledge = resp.response;
                 } else {
                     const resp = await this.ai.models.generateContent({
-                        model: 'gemini-1.5-flash', // Corrected model name
+                        model: 'gemini-2.5-pro',
                         contents: prompt,
                         config: { temperature: 0.3 }
                     });
@@ -96,18 +128,20 @@ class Cartographer {
                 throw new Error(`LLM Generation Failed: ${llmError.message}`);
             }
 
-            updatedKnowledge = updatedKnowledge.replace(/^```markdown\n?/gi, '').replace(/^```\n?/gi, '').replace(/\n?```$/gi, '').trim();
+            updatedKnowledge = updatedKnowledge.replace(/```markdown\n?/gi, '').replace(/```/gi, '').trim();
 
             if (updatedKnowledge.length > 50) {
-                const sections = updatedKnowledge.split('=== FILE: ');
+                // More robust parsing: look for lines exactly like '=== FILE: filename.md ==='
+                const fileRegex = /===\s*FILE:\s*([a-zA-Z0-9_-]+\.md)\s*===/gi;
+                const sections = updatedKnowledge.split(fileRegex);
                 let count = 0;
-                for (const section of sections) {
-                    if (!section.trim()) continue;
-                    const lines = section.split('\n');
-                    let filename = lines[0].replace('===', '').trim();
-                    const content = lines.slice(1).join('\n').trim();
-                    if (filename && filename.endsWith('.md')) {
-                        // Native File System writing
+
+                // sections[0] is text before first delimiter, sections[1] is first filename, sections[2] is content, etc.
+                for (let i = 1; i < sections.length; i += 2) {
+                    const filename = sections[i].trim();
+                    const content = sections[i+1] ? sections[i+1].trim() : '';
+
+                    if (filename.endsWith('.md') && content.length > 0) {
                         const targetPath = path.join(KNOWLEDGE_DIR, filename);
                         fs.writeFileSync(targetPath, content, 'utf8');
                         count++;

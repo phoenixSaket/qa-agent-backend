@@ -138,7 +138,7 @@ const agentSchema = {
 function buildKnowledgeUpdatePrompt(currentKnowledge, mission, runLog) {
     return `You are a Cartography Documentation assistant. Below is the CURRENT knowledge base spanning multiple markdown files, followed by a LOG of actions taken during a QA test.
 
-Your job: Produce an UPDATED version of the knowledge base that maps the app modularly. You MUST split your output exactly using these file delimiters:
+Your job: Produce an UPDATED version of the knowledge base that maps the app modularly. You MUST split your output exactly using these exact file delimiters format (=== FILE: <filename.md> ===):
 
 === FILE: discovered_pages.md ===
 (List newly identified screens or app states)
@@ -153,7 +153,7 @@ Your job: Produce an UPDATED version of the knowledge base that maps the app mod
 === FILE: CONNECT_SYSTEM_DOCUMENTATION.md ===
 (Map specific context logic flows: e.g., 'User clicked Settings -> Navigated to Preference View')
 
-Preserve existing knowledge and ADD new findings! Do not use markdown code-block fences around your output.
+Preserve existing knowledge and ADD new findings! Do not use markdown code-block fences around your output. Make sure the headers match EXACTLY the format "=== FILE: filename.md ===".
 
 CURRENT KNOWLEDGE BASE INCORPORATING ALL MODULES:
 ${currentKnowledge}

@@ -27,7 +27,7 @@ class Supervisor {
         // Initialize Specialized Workers
         this.architect = new Architect();
         this.navigator = new Navigator(ai, ollama, aiProvider);
-        this.sentry = new Sentry(projectManager);
+        this.sentry = new Sentry(projectManager, ai, ollama, aiProvider);
         this.reporter = new Reporter();
         this.cartographer = new Cartographer(ai, ollama, aiProvider);
 
@@ -154,11 +154,8 @@ class Supervisor {
                 try {
                     this.socket.emit('agent_message', { sender: 'system', text: `<strong>━━━ Step ${stepCount}/${MAX_STEPS} ━━━</strong>` });
                     
-                    // The Sentry continuously monitors for errors
-                    const sentryAlert = this.sentry.monitorLogs();
-                    if (sentryAlert) {
-                        this.socket.emit('agent_message', { sender: 'system', text: `[SENTRY ALERT] ${sentryAlert}` });
-                    }
+                    // The Sentry continuously monitors for errors asynchronously utilizing a separate LLM
+                    const sentryAlertPromise = this.sentry.monitorLogsAsync();
 
                     // --- SUPERVISOR: THINK PHASE ---
                     // Determine if the mission is purely analytical (Architect) or requires UI interaction (Navigator).
@@ -188,6 +185,11 @@ class Supervisor {
                     const screenshotBase64 = fs.readFileSync(screenshotPath).toString('base64');
 
                     if (!this.socket.isAgentRunning) break;
+
+                    const sentryAlert = await sentryAlertPromise;
+                    if (sentryAlert) {
+                        this.socket.emit('agent_message', { sender: 'system', text: `[SENTRY ALERT] ${sentryAlert}` });
+                    }
 
                     this.socket.emit('ui_dump', { xml: xml });
                     this.socket.emit('agent_screenshot', { base64: screenshotBase64 });
@@ -338,7 +340,7 @@ class Supervisor {
                             console.log(`\n--- [RAW LLM RESPONSE (Step ${stepCount})] ---\n${rawJsonStr}\n--- [END RAW RESPONSE] ---\n`);
                         } else {
                             const result = await this.ai.models.generateContentStream({
-                                model: 'qwen2.5-coder:latest',
+                                model: 'gemini-2.5-pro',
                                 contents: [
                                     { text: prompt },
                                     { inlineData: { mimeType: "image/png", data: screenshotBase64 } }
