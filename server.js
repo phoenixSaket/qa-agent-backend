@@ -303,6 +303,8 @@ function simplifyXml(rawXml) {
 
         // Build a clean, readable line
         const parts = [];
+        parts.push(`[UI-ELEMENT]`);
+        parts.push(`bounds="${bounds}"`);
         if (hasText) parts.push(`text="${text}"`);
         // Clean content-desc: remove leading ", " prefix that React Native adds
         const cleanDesc = contentDesc.replace(/^,\s*/, '').trim();
@@ -313,7 +315,6 @@ function simplifyXml(rawXml) {
         // Short class name (just the last part)
         const shortClass = className.split('.').pop();
         parts.push(`class="${shortClass}"`);
-        parts.push(`bounds="${bounds}"`);
 
         elements.push(parts.join(' | '));
     }

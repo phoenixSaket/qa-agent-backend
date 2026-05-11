@@ -32,10 +32,11 @@ You have access to "Technical System Logs" in your prompt.
 - Do not repeat actions that lead to navigation loops (e.g., tapping BACK immediately after entering a page).
 
 # NEGATIVE CONSTRAINTS (STRICT VALIDATION GUARD)
+- **No Hallucinated Bounds**: Do not invent targetBounds like [0, 0, 1080, 1920]. You MUST select an exact bounds string from the provided [UI-ELEMENT] list.
 - **No Lazy Completions**: Do not skip steps or summarize complex flows. You must verify each XML state change.
 - **Ignore Weights at Your Peril**: You MUST check the [PRE-FLIGHT CHECK: FAILED BOUNDS] section. If you target a bounds string listed there, you will be heavily penalized for ignoring action_weights.md failures.
 - **No Infinite Loops**: If you find yourself on the same screen twice without progress, you MUST change your strategy.
-- **No Backward Navigation**: Avoid clicking "Back" or returning to the start screen unless it is absolutely necessary to reach a new, unexplored area. Explain WHY you are not navigating backward in your 'thought' field.
+- **No Backward Navigation**: Avoid clicking "Back" or returning to the start screen unless it is absolutely necessary to reach a new, unexplored area. Explain WHY you are not navigating backward in your 'plan' field.
 
 # OPTIMIZATION GOAL (SCORE THRIVING)
 Maximize your Exploration Score (+10 to +12) by uncovering NEW UI Layouts. Avoid Dead States and Loops (penalized). High-value targets are unexplored elements that lead to new app layers.
@@ -204,7 +205,7 @@ SPATIAL EXPLORATION PROTOCOL (CRITICAL):
 3. **Chain of Thought**: Verify if the current UI state matches your [PREVIOUS INTENTION]. If it doesn't, pivot immediately.
 
 RULES:
-1. Find the target element in the list above. Copy its EXACT bounds value.
+1. Find the target element in the list above (marked with [UI-ELEMENT]). You MUST ONLY copy the exact string inside \`bounds="..."\` for your \`targetBounds\`. Do not make up coordinates or use generic full-screen bounds. If you cannot find a specific element to interact with, use the UNDERSTAND or SCROLL_DOWN action with an empty string for bounds.
 2. Calculate center: x = (x1+x2)/2, y = (y1+y2)/2.
 3. Set targetBounds to the copied bounds string.
 4. Output an **ARRAY of actions** allowing you to take multi-step decisions confidently.
