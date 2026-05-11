@@ -414,10 +414,16 @@ class Supervisor {
                     actionHistory.push(currentAction);
                     if (actionHistory.length > 5) actionHistory.shift();
 
+                    const nonInteractiveActions = ['SCROLL_DOWN', 'SCROLL_UP', 'BACK', 'UNDERSTAND', 'MISSION_ACCOMPLISHED', 'READ_CODE'];
+                    if (nonInteractiveActions.includes(decision.action)) {
+                        // Clear target bounds so the hallucination guard ignores them
+                        decision.targetBounds = "";
+                    }
+
                     if (previousUiState && this.stateDeadEnds.has(previousUiState)) {
                         const deadSet = this.stateDeadEnds.get(previousUiState);
                         const coordKey = `${decision.x},${decision.y}`;
-                        const isBoundsBlocked = decision.targetBounds && deadSet.has(decision.targetBounds);
+                        const isBoundsBlocked = decision.targetBounds && decision.targetBounds !== "" && deadSet.has(decision.targetBounds);
                         const isCoordBlocked = deadSet.has(coordKey);
 
                         if (isBoundsBlocked || isCoordBlocked) {
@@ -470,17 +476,20 @@ class Supervisor {
                             decision.x = Math.round((bx1 + bx2) / 2);
                             decision.y = Math.round((by1 + by2) / 2);
                         }
+
                         if (!filteredUi.includes(decision.targetBounds)) {
                             this.appendWeight(-25, `Hallucination Guard! Attempted to target invisible bounds.`);
                             this.runLog.push(`[SYSTEM REJECTED] Target bounds do not exist in current UI.`);
                             this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Bounds not found in UI.` });
                             continue;
                         }
-                    } else if (decision.targetBounds === '[]' || decision.targetBounds === '[0, 0, 1080, 1920]' || decision.targetBounds === '[0, 0, 1280, 720]') {
-                        this.appendWeight(-25, `Hallucination Guard! Attempted to target invalid generic bounds.`);
-                        this.runLog.push(`[SYSTEM REJECTED] Target bounds are invalid. Pick exact bounds from the list or use UNDERSTAND with empty bounds.`);
-                        this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Invalid generic bounds format.` });
-                        continue;
+                    } else if (decision.action === 'TAP' || decision.action === 'TYPE' || decision.action === 'LONG_PRESS' || decision.action === 'DOUBLE_TAP') {
+                        if (!decision.targetBounds || decision.targetBounds === '[]' || decision.targetBounds === '[0, 0, 1080, 1920]' || decision.targetBounds === '[0, 0, 1280, 720]') {
+                            this.appendWeight(-25, `Hallucination Guard! Attempted to target invalid generic bounds for interactive action.`);
+                            this.runLog.push(`[SYSTEM REJECTED] Target bounds are invalid for interactive action. Pick exact bounds from the list.`);
+                            this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM REJECTED] Blocked Hallucination: Invalid bounds format for action.` });
+                            continue;
+                        }
                     }
 
                     this.socket.emit('highlight_target', { bounds: decision.targetBounds });
@@ -513,17 +522,26 @@ class Supervisor {
 
                     switch (agentAction) {
                         case 'TAP':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] TAP Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.tap(decision.x, decision.y);
                             await sleep(2000);
                             break;
                         case 'DOUBLE_TAP':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] DOUBLE_TAP Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.doubleTap(decision.x, decision.y);
                             await sleep(2000);
                             break;
                         case 'LONG_PRESS':
-                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) break;
+                            if (decision.x === undefined || decision.y === undefined || (decision.x === 0 && decision.y === 0)) {
+                                this.socket.emit('agent_message', { sender: 'system', text: `[SYSTEM] LONG_PRESS Failed: Invalid coordinates.` });
+                                break;
+                            }
                             await this.adb.longPress(decision.x, decision.y);
                             await sleep(2000);
                             break;
