@@ -19,8 +19,51 @@ class Navigator {
         this.ollama = ollamaClient;
         this.provider = provider;
     }
-    // Navigator acts as the agent deciding UI/ADB interactions. 
-    // Handled in Supervisor currently, but we can encapsulate its role here if needed.
+
+    async identifyInteractiveElements(rawXml) {
+        // Strip XML noise for the LLM payload to save context
+        const strippedXml = rawXml
+            .replace(/<hierarchy[^>]*>/, '')
+            .replace(/<\/hierarchy>/, '')
+            .replace(/index="\d+"/g, '')
+            .replace(/package="[^"]+"/g, '')
+            .replace(/checkable="[^"]+"/g, '')
+            .replace(/checked="[^"]+"/g, '')
+            .replace(/password="[^"]+"/g, '')
+            .replace(/long-clickable="[^"]+"/g, '')
+            .replace(/focused="[^"]+"/g, '')
+            .replace(/focusable="[^"]+"/g, '');
+
+        const prompt = `You are a UI Analysis Expert Agent.
+Your task is to analyze this raw Android UI XML dump and identify ALL genuinely interactive elements.
+React Native applications often wrap text or icons in a 'ViewGroup' where 'clickable="false"' but the element is actually the intended tap target.
+
+Analyze the XML. Identify every element that a human user would consider interactive (buttons, tabs, feed items, settings rows, icons with descriptions, text links).
+For each identified element, output a single line in this EXACT format:
+[UI-ELEMENT] bounds="[x1,y1][x2,y2]" | text="element text" | desc="element description" | class="ClassName"
+
+DO NOT output any conversational text. Output ONLY the list of [UI-ELEMENT] lines.
+
+RAW XML:
+${strippedXml.substring(0, 15000)}
+`;
+        try {
+            // Force the use of llama3.1:8b with a high context window as requested
+            const resp = await this.ollama.generate({
+                model: 'llama3.1:8b',
+                prompt: prompt,
+                options: {
+                    temperature: 0.1,
+                    num_ctx: 10000,
+                    stream: false
+                },
+            });
+            return resp.response.trim();
+        } catch (err) {
+            console.error('[NAVIGATOR AI ERROR]', err);
+            return null; // Fallback to heuristic parser if AI fails
+        }
+    }
 }
 
 class Sentry {

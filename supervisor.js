@@ -205,7 +205,13 @@ class Supervisor {
                     this.socket.emit('ui_dump', { xml: xml });
                     this.socket.emit('agent_screenshot', { base64: screenshotBase64 });
 
-                    const simplifiedUi = this.simplifyXml(xml);
+                    this.socket.emit('agent_message', { sender: 'system', text: '[NAVIGATOR] Analyzing raw UI elements to map deep interactive targets...' });
+                    let simplifiedUi = await this.navigator.identifyInteractiveElements(xml);
+
+                    if (!simplifiedUi || simplifiedUi.length < 50 || !simplifiedUi.includes('[UI-ELEMENT]')) {
+                        this.socket.emit('agent_message', { sender: 'system', text: '[NAVIGATOR] AI Analysis failed or returned empty. Falling back to heuristic XML parser.' });
+                        simplifiedUi = this.simplifyXml(xml);
+                    }
 
                     // --- SUPERVISOR: MEMORY INTEGRATION (Pre-Plan phase) ---
                     const actionWeights = this.loadWeights();
