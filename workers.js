@@ -48,7 +48,7 @@ Output ONLY the text "CRITICAL: " followed by a 1-sentence summary of the error 
             let responseText = '';
             if (this.provider === 'ollama') {
                 const resp = await this.ollama.generate({
-                    model: 'gemma2:2b',
+                    model: 'llama3.1:8b',
                     prompt: prompt,
                     options: { temperature: 0.1, stream: false },
                 });
@@ -108,7 +108,7 @@ class Cartographer {
             try {
                 if (this.provider === 'ollama') {
                     const resp = await this.ollama.generate({
-                        model: 'gemma2:2b',
+                        model: 'llama3.1:8b',
                         prompt: prompt,
                         options: { temperature: 0.4, stream: false },
                     });

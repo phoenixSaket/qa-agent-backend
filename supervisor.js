@@ -131,6 +131,17 @@ class Supervisor {
             this.socket.emit('agent_message', { sender: 'system', text: '[SYSTEM] Loading environment context...' });
             const SYSTEM_PROMPT = buildSystemPrompt(dependencyContext);
 
+            // Proactive Code Scanning by Architect on boot
+            if (!fs.existsSync(path.join(KNOWLEDGE_DIR, 'code_architecture.md'))) {
+                this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Performing initial codebase scan. Building architectural blueprint...' });
+                try {
+                    await this.architect.analyze(FRONTEND_PATH, BACKEND_PATH);
+                    this.socket.emit('agent_message', { sender: 'system', text: '[ARCHITECT] Initial codebase map generated in knowledge core.' });
+                } catch (e) {
+                    this.socket.emit('agent_message', { sender: 'system', text: `[ARCHITECT] Warning: Failed to scan codebase - ${e.message}` });
+                }
+            }
+
             this.visitedStates.clear();
             let previousUiState = null;
             let lastActionData = null;
@@ -446,16 +457,18 @@ class Supervisor {
                     this.socket.emit('highlight_target', { bounds: decision.targetBounds });
                     this.socket.emit('agent_message', {
                         sender: 'agent',
-                        text: `<strong>Observation:</strong> ${decision.observation} <br> <strong>Thought:</strong> ${decision.thought} <br> <strong>Plan:</strong> ${decision.plan} <br> <strong>Audit:</strong> ${decision.reasoning_audit} <br> <strong>Bounds:</strong> ${decision.targetBounds || 'N/A'} -> <strong>Tap:</strong> (${decision.x}, ${decision.y}) <br> <strong>Action:</strong> ${decision.action}`
+                        text: `<strong>Page:</strong> ${decision.current_page_analysis} <br> <strong>Intent:</strong> ${decision.user_intent} <br> <strong>Plan:</strong> ${decision.plan} <br> <strong>Expected:</strong> ${decision.expected_behavior} <br> <strong>Audit:</strong> ${decision.reasoning_audit} <br> <strong>Bounds:</strong> ${decision.targetBounds || 'N/A'} -> <strong>Action:</strong> ${decision.action}`
                     });
 
-                    this.runLog.push(`[Step ${stepCount}] Observation: ${decision.observation}`);
-                    this.runLog.push(`[Step ${stepCount}] Thought: ${decision.thought}`);
+                    this.runLog.push(`[Step ${stepCount}] Page: ${decision.current_page_analysis}`);
+                    this.runLog.push(`[Step ${stepCount}] Clickable: ${decision.clickable_items_analysis}`);
+                    this.runLog.push(`[Step ${stepCount}] Intent: ${decision.user_intent}`);
+                    this.runLog.push(`[Step ${stepCount}] Expected: ${decision.expected_behavior}`);
                     this.runLog.push(`[Step ${stepCount}] Plan: ${decision.plan}`);
                     this.runLog.push(`[Step ${stepCount}] Audit: ${decision.reasoning_audit}`);
                     this.runLog.push(`[Step ${stepCount}] Action: ${decision.action} at (${decision.x}, ${decision.y}) bounds=${decision.targetBounds || 'N/A'}`);
 
-                    const thoughtText = decision.thought ? decision.thought.toLowerCase() : "";
+                    const thoughtText = decision.plan ? decision.plan.toLowerCase() : "";
                     if (decision.action === 'MISSION_ACCOMPLISHED' && (thoughtText.includes('tap') || thoughtText.includes('click') || thoughtText.includes('navigate to'))) {
                         await sleep(2000);
                         stepCount--; 
@@ -527,10 +540,23 @@ class Supervisor {
                                 try {
                                     const code = await this.projectManager.readFile(codeReq.project, codeReq.filePath);
                                     this.runLog.push(`[Step ${stepCount}] READ_CODE Output (${codeReq.filePath}):\n${code}`);
+
+                                    // Push directly to Cartographer so it updates the map
+                                    await this.cartographer.updateKnowledge(
+                                        `Analyzed codebase logic for ${codeReq.filePath}`,
+                                        this.loadKnowledge(),
+                                        [`Action: READ_CODE`, `Code snippet:\n${code.substring(0, 1000)}`],
+                                        this.socket,
+                                        buildKnowledgeUpdatePrompt
+                                    );
                                 } catch (err) {
                                     this.runLog.push(`[Step ${stepCount}] READ_CODE Failed: ${err.message}`);
                                 }
                             }
+                            break;
+                        case 'UNDERSTAND':
+                            this.runLog.push(`[Step ${stepCount}] UNDERSTAND: AI analyzed screen and logs, deferring action to learn.`);
+                            await sleep(2000);
                             break;
                         case 'MISSION_ACCOMPLISHED':
                             if (decision.x !== undefined && decision.y !== undefined && (decision.x !== 0 || decision.y !== 0)) {
